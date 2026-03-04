@@ -1560,12 +1560,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Write the formatted output to this file instead of stdout.",
     )
     parser.add_argument(
-        "-f",
-        "--feedback",
-        type=Path,
-        help="Write a DOCX reviewer feedback template to this file.",
-    )
-    parser.add_argument(
         "-A",
         "--agenda-docx",
         type=Path,
@@ -1769,8 +1763,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return 1
 
     output_lines: List[str] = []
-    feedback_records: List[DocxRecord] = []
-    feedback_path: Optional[Path] = args.feedback
 
     for proposal in proposals:
         proposal.pop("normalised_text", None)
@@ -1790,20 +1782,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         output_lines.extend(rendered)
         output_lines.append("")
-        if feedback_path:
-            docx_lines = list(rendered)
-            if docx_lines:
-                docx_lines[0] = DOCX_SEPARATOR
-            feedback_records.append(
-                {
-                    "lines": docx_lines,
-                    "comment": build_comment_text(
-                        proposal.get("first_reviewer"),
-                        proposal.get("second_reviewer"),
-                    ),
-                }
-            )
-            log_verbose(f"Prepared feedback template page for {proposal['exp']}.")
 
     if args.output:
         log_verbose(f"Writing text output to {args.output}.")
@@ -1815,14 +1793,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     else:
         for line in output_lines:
             print(line)
-
-    if feedback_path:
-        try:
-            log_verbose(f"Writing feedback DOCX to {feedback_path}.")
-            write_docx_records(feedback_records, feedback_path)
-        except OSError as exc:
-            print(f"Failed to write feedback DOCX: {exc}", file=sys.stderr)
-            return 1
 
     if args.agenda_docx:
         try:

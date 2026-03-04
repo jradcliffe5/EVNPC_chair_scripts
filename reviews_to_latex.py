@@ -126,6 +126,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             "(proposal/PI/title + reviewer initials + pre-grade + std + N>2.0 + conflict)."
         ),
     )
+    parser.add_argument(
+        "--code-mapping",
+        type=Path,
+        default=None,
+        help=(
+            "Optional file mapping EVN session codes to proposal codes "
+            "(e.g. E26A001 -> EC107).  When provided, section titles are "
+            "rendered as 'E26A001/EC107: Title'."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -627,6 +637,23 @@ def load_conflicts(path: Path) -> Dict[str, str]:
     return conflicts
 
 
+def load_code_mapping(path: Path) -> Dict[str, str]:
+    """Parse an EVN code mapping file into a dict {evn_code -> proposal_code}.
+
+    Each non-blank line whose first whitespace-delimited token matches the
+    proposal-code pattern (e.g. ``E26A001``) is treated as a mapping entry;
+    the second token on that line is the alternative proposal code (e.g. ``EC107``).
+    Lines that are continuations (PI name overflow etc.) are silently skipped.
+    """
+    mapping: Dict[str, str] = {}
+    data = read_text_with_fallback(path)
+    for line in data.splitlines():
+        tokens = line.split()
+        if len(tokens) >= 2 and PROPOSAL_CODE_RE.match(tokens[0]):
+            mapping[tokens[0].upper()] = tokens[1]
+    return mapping
+
+
 def proposal_pre_grade(summary: ProposalSummary) -> str:
     """Return numeric mean grade across available reviewer grades."""
     numeric_values: List[float] = []
@@ -756,6 +783,48 @@ def build_agenda_text(
     return "\n".join(blocks).rstrip() + "\n"
 
 
+def process_text_for_latex(text: str) -> str:
+    """Escape and render review text, highlighting #-prefixed lines as internal PC comments.
+
+    Lines whose first non-whitespace character is ``#`` are treated as
+    internal committee notes.  They are stripped of the leading ``#``,
+    prefixed with **Internal:** and rendered in blue.  All other lines are
+    normalised and escaped as usual.
+    """
+    if not text:
+        return text
+
+    lines = text.splitlines()
+    segments: List[tuple[str, str]] = []
+    current_regular: List[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if current_regular:
+                segments.append(("regular", "\n".join(current_regular)))
+                current_regular = []
+            segments.append(("internal", stripped[1:].strip()))
+        else:
+            current_regular.append(line)
+    if current_regular:
+        segments.append(("regular", "\n".join(current_regular)))
+
+    result_parts: List[str] = []
+    for kind, content in segments:
+        if kind == "regular":
+            normalized = normalize_paragraphs(content)
+            if normalized:
+                result_parts.append(latex_escape(normalized))
+        else:
+            escaped = latex_escape(content)
+            result_parts.append(
+                r"{\color{blue}\textbf{Internal:} " + escaped + "}"
+            )
+
+    return "\n\n".join(part for part in result_parts if part)
+
+
 def format_review_block(review: ReviewEntry) -> str:
     """Return LaTeX formatted block for a single review entry."""
     parts: List[str] = []
@@ -772,13 +841,13 @@ def format_review_block(review: ReviewEntry) -> str:
 
     if review.referee_comments:
         parts.append("\\textbf{Referee comments}\\\\")
-        comments = latex_escape(normalize_paragraphs(review.referee_comments))
+        comments = process_text_for_latex(review.referee_comments)
         parts.append(comments)
 
     if review.technical_review:
         parts.append("\\par")
         parts.append("\\textbf{Technical review}\\\\")
-        tech = latex_escape(normalize_paragraphs(review.technical_review))
+        tech = process_text_for_latex(review.technical_review)
         parts.append(tech)
 
     source_path = latex_escape(str(review.source_file))
@@ -788,7 +857,10 @@ def format_review_block(review: ReviewEntry) -> str:
 
 
 def build_latex_document(
-    summaries: Dict[str, ProposalSummary], title: str, version: str = ""
+    summaries: Dict[str, ProposalSummary],
+    title: str,
+    version: str = "",
+    code_mapping: Optional[Dict[str, str]] = None,
 ) -> str:
     """Render the combined summaries into a LaTeX document string."""
     preamble = [
@@ -800,6 +872,7 @@ def build_latex_document(
         r"\usepackage[hidelinks]{hyperref}",
         r"\usepackage{longtable}",
         r"\usepackage{enumitem}",
+        r"\usepackage{xcolor}",
         r"\usepackage{cuted}",
         r"\usepackage{titling}",
         r"\setlength{\droptitle}{-1.5em}",
@@ -889,7 +962,9 @@ def build_latex_document(
         if idx > 0:
             body.append("\\clearpage")
 
-        section_title = f"{summary.code}: {summary.title}" if summary.title else summary.code
+        alt_code = (code_mapping or {}).get(summary.code.upper(), "")
+        code_label = f"{summary.code}/{alt_code}" if alt_code else summary.code
+        section_title = f"{code_label}: {summary.title}" if summary.title else code_label
         body.append("\\begin{strip}")
         body.append(f"\\section*{{{latex_escape(section_title)}}}")
         if summary.pi:
@@ -957,7 +1032,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if assignment_map:
         apply_assignments(combined, assignment_map)
 
-    latex_content = build_latex_document(combined, args.title, args.version)
+    code_mapping: Dict[str, str] = {}
+    if args.code_mapping:
+        if not args.code_mapping.is_file():
+            print(f"Code mapping file not found: {args.code_mapping}", file=sys.stderr)
+            return 1
+        code_mapping = load_code_mapping(args.code_mapping)
+
+    latex_content = build_latex_document(combined, args.title, args.version, code_mapping)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(latex_content, encoding="utf-8")
     print(f"Wrote LaTeX summary to {args.output}")

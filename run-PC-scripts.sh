@@ -13,6 +13,7 @@ usage() {
     echo "  all       rename             -- rename all reviews from CSV"
     echo "  all       reminder [--send]  -- send all review reminders (dry-run by default)"
     echo "  all       latex          -- generate all-review LaTeX summary"
+    echo "  feedback  [--split-tex]  -- generate draft feedback emails .docx (optionally split per-proposal .tex)"
 }
 
 SESSION="2026A"
@@ -117,13 +118,29 @@ case "$SECTION" in
       latex)
         $PY_EXEC ${SCRIPTS_DIR}/reviews_to_latex.py \
           -r all_pc_reviews -o EVNPC_review_summary_$SESSION".tex" -a reviewer_assignments.txt \
-          --agenda-txt EVNPC_agenda_items_$SESSION".txt"
+          --agenda-txt EVNPC_agenda_items_$SESSION".txt" \
+          --code-mapping evn_code_mapping.txt
         ;;
       *)
         echo "Unknown command '$CMD' for section 'all'."
         usage; exit 1
         ;;
     esac
+    ;;
+
+  feedback)
+    SPLIT_TEX_ARGS=""
+    if [ "$CMD" = "--split-tex" ]; then
+      SPLIT_TEX_ARGS="--split-tex feedback_tex/ --reviews-dir all_pc_reviews"
+    fi
+    $PY_EXEC ${SCRIPTS_DIR}/generate_feedback_emails.py \
+      -a "EVNPC_${SESSION}_assessment.txt" \
+      -m evn_code_mapping.txt \
+      -r reviewer_assignments.txt \
+      -o "EVNPC_${SESSION}_feedback.docx" \
+      --suffix-file evn_pc_suffix_content.txt \
+      --session "${SESSION}" \
+      $SPLIT_TEX_ARGS
     ;;
 
   *)
