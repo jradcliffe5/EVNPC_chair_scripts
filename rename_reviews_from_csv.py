@@ -31,6 +31,7 @@ import io
 import re
 import shutil
 import sys
+import unicodedata
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
@@ -114,7 +115,8 @@ def sanitized_component(value: str) -> str:
 
 def normalize_name(value: str) -> str:
     """Normalise a name for comparison (case-insensitive, single spaces)."""
-    return " ".join(value.lower().split())
+    normalized = unicodedata.normalize("NFC", value)
+    return " ".join(normalized.lower().split())
 
 
 def split_version_suffix(stem: str) -> Tuple[str, Optional[int]]:
@@ -179,7 +181,7 @@ def find_submission_file(
 ) -> Optional[Path]:
     """Locate a file matching '* - Name Surname.*' in the source directory."""
     target_tail = normalize_name(f"- {name} {surname}")
-    matches: list[Tuple[Path, Optional[int]]] = []
+    matches: list[Tuple[Path, Optional[int], float]] = []
     for candidate in sorted(source_dir.rglob("*")):
         if not candidate.is_file():
             continue
@@ -189,14 +191,14 @@ def find_submission_file(
         if stem_normalized.endswith(target_tail):
             if not prefer_newest:
                 return candidate
-            matches.append((candidate, version))
+            matches.append((candidate, version, candidate.stat().st_mtime))
     if not matches:
         return None
     return max(
         matches,
         key=lambda item: (
-            0 if item[1] is None else item[1],
-            item[0].stat().st_mtime,
+            item[2],
+            -1 if item[1] is None else item[1],
             str(item[0]).lower(),
         ),
     )[0]

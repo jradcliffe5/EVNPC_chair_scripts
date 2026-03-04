@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import csv
 import io
+import math
 import re
 import sys
 import unicodedata
@@ -37,8 +38,18 @@ SIMPLE_FIELD_NAMES = [
     "Technical review",
     "Time recommended",
 ]
+SIMPLE_FIELD_ALIASES = {
+    "grade": "Grade",
+    "general remark": "General remark",
+    "general remarks": "General remark",
+    "strengths": "Strengths",
+    "weaknesses": "Weaknesses",
+    "referee comments": "Referee comments",
+    "technical review": "Technical review",
+    "time recommended": "Time recommended",
+}
 PROPOSAL_CODE_RE = re.compile(r"^[A-Z]\d{2}[A-Z]\d{3}$", re.IGNORECASE)
-SPECIAL_GRADE_RE = re.compile(r"\b(resubmission|reject)\b", re.IGNORECASE)
+SPECIAL_GRADE_RE = re.compile(r"\b(resubmission|resubmit|reject)\b", re.IGNORECASE)
 
 
 @dataclass
@@ -106,11 +117,21 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=None,
         help="Optional reviewer assignment summary file to tag first/second reviewers.",
     )
+    parser.add_argument(
+        "--agenda-txt",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path for agenda-friendly plain-text output "
+            "(proposal/PI/title + reviewer initials + pre-grade + std + N>2.0 + conflict)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 UNICODE_REPLACEMENTS = {
     " ": " ",
+    " ": " ",
     "‐": "-",
     "‑": "-",
     "‒": "-",
@@ -122,9 +143,11 @@ UNICODE_REPLACEMENTS = {
     "’": "'",
     "“": "``",
     "”": "''",
+    "″": r"$''$",
     "µ": r"$\mu$",
     "°": r"$^{\circ}$",
     "×": r"$\times$",
+    "∼": r"$\sim$",
     "≤": r"$\le$",
     "≥": r"$\ge$",
     "α": r"$\alpha$",
@@ -134,22 +157,26 @@ UNICODE_REPLACEMENTS = {
     "μ": r"$\mu$",
 }
 
+# Unicode characters that should remain in the generated .tex but need LaTeX
+# declarations to compile under pdfLaTeX.
+UNICODE_LATEX_DECLARATIONS = {
+    "00B1": r"\ensuremath{\pm}",
+    "0144": r"\'{n}",
+    "03C3": r"\ensuremath{\sigma}",
+    "2192": r"\ensuremath{\rightarrow}",
+    "2248": r"\ensuremath{\approx}",
+    "FF5E": r"\textasciitilde{}",
+}
+
 
 def normalize_unicode(text: str) -> str:
-    """Normalize common Unicode punctuation/symbols to LaTeX-safe ASCII."""
+    """Normalize common Unicode punctuation/symbols while preserving UTF-8 text."""
     if not text:
         return text
+    text = unicodedata.normalize("NFC", text)
     for source, replacement in UNICODE_REPLACEMENTS.items():
         text = text.replace(source, replacement)
-    cleaned = []
-    for char in text:
-        if ord(char) < 128:
-            cleaned.append(char)
-            continue
-        decomposed = unicodedata.normalize("NFKD", char)
-        ascii_part = decomposed.encode("ascii", "ignore").decode("ascii")
-        cleaned.append(ascii_part if ascii_part else "?")
-    return "".join(cleaned)
+    return text
 
 
 def normalize_paragraphs(text: str) -> str:
@@ -238,10 +265,26 @@ def role_sort_key(role: Optional[int]) -> int:
     return 2
 
 
+def read_text_with_fallback(path: Path) -> str:
+    """Read text as UTF-8, falling back to cp1252 for legacy files."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as utf8_error:
+        try:
+            text = path.read_text(encoding="cp1252")
+        except UnicodeDecodeError:
+            raise utf8_error
+        print(
+            f"Warning: decoded non-UTF-8 file using cp1252: {path}",
+            file=sys.stderr,
+        )
+        return text
+
+
 def load_assignments(path: Path) -> Dict[str, Dict[str, int]]:
     """Parse reviewer assignment summary to map proposal codes to reviewer roles."""
     mapping: Dict[str, Dict[str, int]] = {}
-    data = path.read_text(encoding="utf-8")
+    data = read_text_with_fallback(path)
     if not data.strip():
         return mapping
 
@@ -302,6 +345,7 @@ def parse_value_block(
     lines: List[str],
     start_index: int,
     field_names: Sequence[str] = FIELD_NAMES,
+    field_aliases: Optional[Dict[str, str]] = None,
 ) -> tuple[str, str, int]:
     """Return (label, value, next_index) for the block starting at start_index."""
     raw_line = lines[start_index]
@@ -316,8 +360,14 @@ def parse_value_block(
     while index < len(lines):
         candidate = lines[index]
         stripped = candidate.strip()
-        if any(stripped.startswith(f"{name}:") for name in field_names):
-            break
+        if ":" in stripped:
+            if field_aliases:
+                candidate_label = stripped.split(":", 1)[0].strip().lower()
+                if candidate_label in field_aliases:
+                    break
+            else:
+                if any(stripped.startswith(f"{name}:") for name in field_names):
+                    break
         if stripped == "":
             if current:
                 paragraphs.append(" ".join(current).strip())
@@ -362,14 +412,18 @@ def parse_simple_review_content(content: str, path: Path) -> Dict[str, ProposalS
                 continue
 
             label = stripped.split(":", 1)[0].strip()
-            if label not in SIMPLE_FIELD_NAMES:
+            canonical = SIMPLE_FIELD_ALIASES.get(label.lower())
+            if not canonical:
                 index += 1
                 continue
 
             label, value, index = parse_value_block(
-                block_lines, index, field_names=SIMPLE_FIELD_NAMES
+                block_lines,
+                index,
+                field_names=SIMPLE_FIELD_NAMES,
+                field_aliases=SIMPLE_FIELD_ALIASES,
             )
-            field_values[label] = value
+            field_values[canonical] = value
 
         if not any(field_values[name] for name in SIMPLE_FIELD_NAMES):
             continue
@@ -411,9 +465,29 @@ def parse_simple_review_content(content: str, path: Path) -> Dict[str, ProposalS
     return summaries
 
 
+def parse_header_columns(header: str) -> tuple[str, str, str, str]:
+    """Parse proposal header line into (code, pi, networks, wavelengths)."""
+    stripped = header.strip()
+    if stripped:
+        columns = re.split(r"\s{2,}", stripped)
+        if len(columns) >= 4 and PROPOSAL_CODE_RE.match(columns[0].strip()):
+            code = columns[0].strip()
+            pi = columns[1].strip()
+            networks = " ".join(part.strip() for part in columns[2:-1] if part.strip())
+            wavelengths = columns[-1].strip()
+            return code, pi, networks, wavelengths
+
+    # Fallback for legacy fixed-width templates.
+    code = header[0:22].strip()
+    pi = header[22:45].strip()
+    networks = header[45:72].strip()
+    wavelengths = header[72:].strip()
+    return code, pi, networks, wavelengths
+
+
 def parse_review_file(path: Path) -> Dict[str, ProposalSummary]:
     """Parse a single review file into proposal summaries keyed by proposal code."""
-    content = path.read_text(encoding="utf-8")
+    content = read_text_with_fallback(path)
     if SEPARATOR not in content:
         simple_summaries = parse_simple_review_content(content, path)
         if simple_summaries:
@@ -431,10 +505,7 @@ def parse_review_file(path: Path) -> Dict[str, ProposalSummary]:
         if not header.strip():
             continue
 
-        exp = header[0:22].strip()
-        pi = header[22:45].strip()
-        networks = header[45:72].strip()
-        wavelengths = header[72:].strip()
+        exp, pi, networks, wavelengths = parse_header_columns(header)
         title = lines[1].strip() if len(lines) > 1 else ""
 
         field_values = {name: "" for name in FIELD_NAMES}
@@ -521,6 +592,170 @@ def apply_assignments(
                 review.role = role
 
 
+def load_conflicts(path: Path) -> Dict[str, str]:
+    """Parse optional 'Conflicts:' section from the assignments summary file."""
+    conflicts: Dict[str, str] = {}
+    data = read_text_with_fallback(path)
+    if not data.strip():
+        return conflicts
+
+    lines = data.splitlines()
+    in_conflict_section = False
+    conflict_pattern = re.compile(r"^\s*([A-Za-z0-9/_.-]+)\s*:\s*(.*?)\s*$")
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not in_conflict_section:
+            if line.lower() == "conflicts:":
+                in_conflict_section = True
+            continue
+
+        if not line:
+            continue
+
+        match = conflict_pattern.match(line)
+        if not match:
+            continue
+
+        code = match.group(1).strip()
+        value = match.group(2).strip()
+        if not value or value.lower() == "none":
+            conflicts[code] = "NONE"
+        else:
+            conflicts[code] = value
+
+    return conflicts
+
+
+def proposal_pre_grade(summary: ProposalSummary) -> str:
+    """Return numeric mean grade across available reviewer grades."""
+    numeric_values: List[float] = []
+    for review in summary.reviews:
+        numeric = parse_numeric_grade(review.grade.strip())
+        if numeric is not None:
+            numeric_values.append(numeric)
+    if not numeric_values:
+        return "N/A"
+    return f"{(sum(numeric_values) / len(numeric_values)):.2f}"
+
+
+def proposal_grade_std(summary: ProposalSummary) -> str:
+    """Return population std-dev across available reviewer grades."""
+    numeric_values: List[float] = []
+    for review in summary.reviews:
+        numeric = parse_numeric_grade(review.grade.strip())
+        if numeric is not None:
+            numeric_values.append(numeric)
+    if not numeric_values:
+        return "N/A"
+
+    mean = sum(numeric_values) / len(numeric_values)
+    variance = sum((value - mean) ** 2 for value in numeric_values) / len(
+        numeric_values
+    )
+    return f"{math.sqrt(variance):.2f}"
+
+
+def proposal_grade_std_numeric(summary: ProposalSummary) -> Optional[float]:
+    """Return numeric population std-dev across available reviewer grades."""
+    numeric_values: List[float] = []
+    for review in summary.reviews:
+        numeric = parse_numeric_grade(review.grade.strip())
+        if numeric is not None:
+            numeric_values.append(numeric)
+    if not numeric_values:
+        return None
+
+    mean = sum(numeric_values) / len(numeric_values)
+    variance = sum((value - mean) ** 2 for value in numeric_values) / len(
+        numeric_values
+    )
+    return math.sqrt(variance)
+
+
+def proposal_low_grade_count(summary: ProposalSummary, threshold: float = 2.0) -> int:
+    """Count numeric reviewer grades greater than or equal to threshold."""
+    count = 0
+    for review in summary.reviews:
+        numeric = parse_numeric_grade(review.grade.strip())
+        if numeric is not None and numeric >= threshold:
+            count += 1
+    return count
+
+
+def proposal_role_initials(
+    summary: ProposalSummary, assignments: Dict[str, Dict[str, int]]
+) -> str:
+    """Return '<primary>/<secondary>' initials for agenda output."""
+    primary: Optional[str] = None
+    secondary: Optional[str] = None
+
+    for review in summary.reviews:
+        if review.role == 1 and primary is None:
+            primary = reviewer_initials(review.reviewer)
+        elif review.role == 2 and secondary is None:
+            secondary = reviewer_initials(review.reviewer)
+
+    code_map = assignments.get(summary.code) or assignments.get(summary.code.upper()) or {}
+    if primary is None or secondary is None:
+        for reviewer_name, role in code_map.items():
+            if role == 1 and primary is None:
+                primary = reviewer_initials(reviewer_name)
+            elif role == 2 and secondary is None:
+                secondary = reviewer_initials(reviewer_name)
+
+    return f"{primary or '?'}/{secondary or '?'}"
+
+
+def build_agenda_text(
+    summaries: Dict[str, ProposalSummary],
+    assignments: Dict[str, Dict[str, int]],
+    conflicts: Dict[str, str],
+) -> str:
+    """Render agenda-friendly text entries (one two-line block per proposal)."""
+    blocks: List[str] = []
+    std_by_code = {
+        code: proposal_grade_std_numeric(summary) for code, summary in summaries.items()
+    }
+
+    # Sort by grade std-dev (descending), then by proposal code for stable ties.
+    sorted_codes = sorted(
+        summaries.keys(),
+        key=lambda code: (
+            -(std_by_code[code] if std_by_code[code] is not None else -1.0),
+            code,
+        ),
+    )
+
+    for code in sorted_codes:
+        summary = summaries[code]
+        header = summary.code
+        if summary.pi:
+            header += f" {summary.pi}"
+        if summary.title:
+            header += f" - {summary.title}"
+
+        role_initials = proposal_role_initials(summary, assignments)
+        pre_grade = proposal_pre_grade(summary)
+        std_grade = proposal_grade_std(summary)
+        low_grade_count = proposal_low_grade_count(summary, threshold=2.0)
+        conflict_value = (
+            conflicts.get(summary.code)
+            or conflicts.get(summary.code.upper())
+            or conflicts.get(code)
+            or conflicts.get(code.upper())
+            or "NONE"
+        )
+
+        blocks.append(header.strip())
+        blocks.append(
+            f"[{role_initials}; pre-grade: {pre_grade}, std: {std_grade}, N>2.0: {low_grade_count}] CONFLICT: {conflict_value}"
+        )
+        blocks.append("")
+
+    return "\n".join(blocks).rstrip() + "\n"
+
+
 def format_review_block(review: ReviewEntry) -> str:
     """Return LaTeX formatted block for a single review entry."""
     parts: List[str] = []
@@ -558,6 +793,9 @@ def build_latex_document(
     """Render the combined summaries into a LaTeX document string."""
     preamble = [
         r"\documentclass[twocolumn]{article}",
+        r"\usepackage[T1]{fontenc}",
+        r"\usepackage[utf8]{inputenc}",
+        r"\usepackage{lmodern}",
         r"\usepackage[margin=2.5cm]{geometry}",
         r"\usepackage[hidelinks]{hyperref}",
         r"\usepackage{longtable}",
@@ -569,6 +807,10 @@ def build_latex_document(
         r"\setlength{\parindent}{0pt}",
         r"\setlength{\parskip}{5pt}",
         r"\setlist{nosep}",
+        *[
+            rf"\DeclareUnicodeCharacter{{{codepoint}}}{{{latex}}}"
+            for codepoint, latex in UNICODE_LATEX_DECLARATIONS.items()
+        ],
         r"\begin{document}",
         rf"\title{{{latex_escape(title)}}}",
     ]
@@ -608,20 +850,27 @@ def build_latex_document(
                 numeric = parse_numeric_grade(grade)
                 if numeric is not None:
                     numeric_values.append(numeric)
-            average_value = (
-                f"{sum(numeric_values) / len(numeric_values):.2f}"
-                if numeric_values
-                else "N/A"
-            )
+            if numeric_values:
+                mean = sum(numeric_values) / len(numeric_values)
+                variance = sum((value - mean) ** 2 for value in numeric_values) / len(
+                    numeric_values
+                )
+                average_value = f"{mean:.2f}"
+                std_dev_value = f"{math.sqrt(variance):.2f}"
+            else:
+                average_value = "N/A"
+                std_dev_value = "N/A"
             header_cells.append(latex_escape("Average"))
+            header_cells.append(latex_escape("Std Dev"))
             values.append(average_value)
+            values.append(std_dev_value)
 
             header_row = " & ".join(header_cells)
             value_row_parts = []
-            last_index = len(values) - 1
+            summary_start_index = len(sorted_entries)
             for idx_col, value in enumerate(values):
                 escaped = latex_escape(value)
-                if idx_col == last_index:
+                if idx_col >= summary_start_index:
                     escaped = f"\\textbf{{{escaped}}}"
                 value_row_parts.append(escaped)
             value_row = " & ".join(value_row_parts)
@@ -698,11 +947,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
 
     assignment_map: Dict[str, Dict[str, int]] = {}
+    conflict_map: Dict[str, str] = {}
     if args.assignments:
         if not args.assignments.is_file():
             print(f"Assignments file not found: {args.assignments}", file=sys.stderr)
             return 1
         assignment_map = load_assignments(args.assignments)
+        conflict_map = load_conflicts(args.assignments)
     if assignment_map:
         apply_assignments(combined, assignment_map)
 
@@ -710,6 +961,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(latex_content, encoding="utf-8")
     print(f"Wrote LaTeX summary to {args.output}")
+
+    if args.agenda_txt:
+        agenda_content = build_agenda_text(combined, assignment_map, conflict_map)
+        args.agenda_txt.parent.mkdir(parents=True, exist_ok=True)
+        args.agenda_txt.write_text(agenda_content, encoding="utf-8")
+        print(f"Wrote agenda text summary to {args.agenda_txt}")
+
     return 0
 
 

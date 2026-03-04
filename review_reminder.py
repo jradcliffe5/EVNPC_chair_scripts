@@ -15,6 +15,7 @@ import csv
 import re
 import smtplib
 import sys
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from email.message import EmailMessage
@@ -137,7 +138,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             "Dear {reviewer},\n\n"
             "This is a reminder that the following review(s) are still outstanding as of {today}:\n"
             "{details}\n\n"
-            "Please upload your review to the shared folder as soon as possible.\n\n"
+            "Please upload your review to the shared folder as soon as possible. If you have issues with the form upload, please email your assessments to this email.\n\n"
             "Kind regards,\n"
             "EVN Programme Committee Chair"
         ),
@@ -226,7 +227,9 @@ def due_date_for_role(role: str, due_dates: Mapping[str, datetime]) -> datetime:
 
 
 def tokenise(text: str) -> List[str]:
-    return NAME_TOKEN_RE.findall(text.lower())
+    normalized = unicodedata.normalize("NFKD", text)
+    stripped = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return NAME_TOKEN_RE.findall(stripped.lower())
 
 
 def canonical_name(value: str) -> str:
