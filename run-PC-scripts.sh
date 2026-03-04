@@ -119,7 +119,8 @@ case "$SECTION" in
         $PY_EXEC ${SCRIPTS_DIR}/reviews_to_latex.py \
           -r all_pc_reviews -o EVNPC_review_summary_$SESSION".tex" -a reviewer_assignments.txt \
           --agenda-txt EVNPC_agenda_items_$SESSION".txt" \
-          --code-mapping evn_code_mapping.txt
+          --code-mapping evn_code_mapping.txt \
+          -t "EVN PC ${SESSION} review summary"
         ;;
       *)
         echo "Unknown command '$CMD' for section 'all'."

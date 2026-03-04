@@ -384,7 +384,17 @@ def parse_value_block(
                 current = []
             index += 1
             continue
-        current.append(stripped)
+        if stripped.startswith("#"):
+            if current:
+                paragraphs.append(" ".join(current).strip())
+                current = []
+            internal_text = stripped[1:].strip()
+            if paragraphs and paragraphs[-1].startswith("# "):
+                paragraphs[-1] = paragraphs[-1] + " " + internal_text
+            else:
+                paragraphs.append("# " + internal_text)
+        else:
+            current.append(stripped)
         index += 1
     if current:
         paragraphs.append(" ".join(current).strip())
@@ -864,7 +874,7 @@ def build_latex_document(
 ) -> str:
     """Render the combined summaries into a LaTeX document string."""
     preamble = [
-        r"\documentclass[twocolumn]{article}",
+        r"\documentclass{article}",
         r"\usepackage[T1]{fontenc}",
         r"\usepackage[utf8]{inputenc}",
         r"\usepackage{lmodern}",
@@ -873,9 +883,11 @@ def build_latex_document(
         r"\usepackage{longtable}",
         r"\usepackage{enumitem}",
         r"\usepackage{xcolor}",
-        r"\usepackage{cuted}",
+        r"\usepackage{multicol}",
         r"\usepackage{titling}",
         r"\setlength{\droptitle}{-1.5em}",
+        r"\predate{\vspace{-1em}\begin{center}}",
+        r"\postdate{\par\end{center}}",
         r"\renewcommand{\familydefault}{\sfdefault}",
         r"\setlength{\parindent}{0pt}",
         r"\setlength{\parskip}{5pt}",
@@ -898,6 +910,8 @@ def build_latex_document(
         [
             rf"\date{{{date_content}}}",
             r"\maketitle",
+            r"\tableofcontents",
+            r"\clearpage",
         ]
     )
     body: List[str] = []
@@ -949,12 +963,13 @@ def build_latex_document(
             value_row = " & ".join(value_row_parts)
 
             table_lines = [
-                "\\centering",
+                "\\begin{center}",
                 f"\\begin{{tabular}}{{{'c' * len(header_cells)}}}",
                 header_row + r"\\",
                 r"\hline",
                 value_row + r"\\",
                 "\\end{tabular}",
+                "\\end{center}",
             ]
         else:
             table_lines = []
@@ -965,8 +980,8 @@ def build_latex_document(
         alt_code = (code_mapping or {}).get(summary.code.upper(), "")
         code_label = f"{summary.code}/{alt_code}" if alt_code else summary.code
         section_title = f"{code_label}: {summary.title}" if summary.title else code_label
-        body.append("\\begin{strip}")
         body.append(f"\\section*{{{latex_escape(section_title)}}}")
+        body.append(f"\\addcontentsline{{toc}}{{section}}{{{latex_escape(section_title)}}}")
         if summary.pi:
             body.append(f"\\textbf{{PI:}} {latex_escape(summary.pi)}\\\\")
         if summary.networks:
@@ -980,13 +995,14 @@ def build_latex_document(
             body.extend(table_lines)
         if table_lines:
             body.append("")
-        body.append("\\end{strip}")
         body.append("")
 
         if not summary.reviews:
             body.append("\\textit{No reviews available.}")
             continue
 
+        body.append("\\vspace{10pt}")
+        body.append("\\begin{multicols}{2}")
         # Sort reviews: primary, secondary, then the rest (by name).
         for review in sorted(
             summary.reviews,
@@ -994,6 +1010,7 @@ def build_latex_document(
         ):
             body.append(format_review_block(review))
             body.append("")  # Blank line between reviews
+        body.append("\\end{multicols}")
 
     footer = [r"\end{document}"]
     parts: List[str] = []
