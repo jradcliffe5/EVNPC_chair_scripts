@@ -14,8 +14,9 @@ usage() {
     echo "  all       rename             -- rename all reviews from CSV"
     echo "  all       reminder [--send]  -- send all review reminders (dry-run by default)"
     echo "  all       latex          -- generate all-review LaTeX summary"
-    echo "  feedback  [--split-tex]  -- generate draft feedback emails .docx (optionally split per-proposal .tex)
-  feedback  reminder [--send]  -- send reminders to PC members with missing feedback summaries"
+    echo "  feedback  [--split-tex]  -- generate draft feedback emails .docx (optionally split per-proposal .tex)"
+  echo "  feedback  --tex-only     -- generate per-proposal .tex files only (no .docx written)"
+  echo "  feedback  reminder [--send]  -- send reminders to PC members with missing feedback summaries"
 }
 
 SESSION="2026A"
@@ -139,6 +140,17 @@ case "$SECTION" in
           --assignments reviewer_assignments.txt \
           --pc-members EVN_pc_members.txt \
           --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APPPWD $DRY_RUN
+        ;;
+      --tex-only)
+        $PY_EXEC ${SCRIPTS_DIR}/generate_feedback_emails.py \
+          -a "EVNPC_${SESSION}_assessment.txt" \
+          -m evn_code_mapping.txt \
+          -r reviewer_assignments.txt \
+          -o "EVNPC_${SESSION}_feedback.docx" \
+          --suffix-file evn_pc_suffix_content.txt \
+          --session "${SESSION}" \
+          --split-tex feedback_tex/ --reviews-dir all_pc_reviews \
+          --tex-only
         ;;
       *)
         read -rp "This will overwrite EVNPC_${SESSION}_feedback.docx. Type 'yes' to confirm: " CONFIRM

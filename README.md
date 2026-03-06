@@ -46,6 +46,7 @@ Edit the `SESSION` variable at the top of the script to match the current observ
 | `all` | `reminder` | Preview reminder emails for all outstanding reviews (add `--send` to actually send). |
 | `all` | `latex` | Generate the combined LaTeX review summary. |
 | `feedback` | | Generate draft feedback `.docx`. Add `--split-tex` to also write per-proposal LaTeX files. |
+| `feedback` | `--tex-only` | Write per-proposal LaTeX files only — no `.docx` is produced. |
 | `feedback` | `reminder` | Preview reminder emails for PC members with missing feedback summaries (add `--send` to actually send). |
 
 ## Typical workflow
@@ -166,8 +167,10 @@ After the PC meeting, fill in the consensus grades and comments in the assessmen
 
 ```bash
 ./run-PC-scripts.sh feedback
-# or with per-proposal LaTeX files:
+# also write per-proposal LaTeX files:
 ./run-PC-scripts.sh feedback --split-tex
+# write LaTeX files only (skip the .docx entirely):
+./run-PC-scripts.sh feedback --tex-only
 ```
 
 Or directly:
@@ -179,10 +182,11 @@ python generate_feedback_emails.py \
   -o EVNPC_2026A_feedback.docx \
   --suffix-file evn_pc_suffix_content.txt \
   --session 2026A \
-  [--split-tex feedback_tex/ --reviews-dir all_pc_reviews/]
+  [--split-tex feedback_tex/ --reviews-dir all_pc_reviews/] \
+  [--tex-only]
 ```
 
-This produces a `.docx` with one draft email per page (including a TOC), with primary/secondary reviewer names annotated as Word comments. With `--split-tex`, it also writes per-proposal standalone LaTeX files to the specified directory.
+This produces a `.docx` with one draft email per page (including a TOC), with primary/secondary reviewer names annotated as Word comments. With `--split-tex`, it also writes per-proposal standalone LaTeX files to the specified directory. Use `--tex-only` (together with `--split-tex`) to skip the `.docx` entirely and only produce the LaTeX files.
 
 ### 5b. Send feedback reminders
 

@@ -11,6 +11,8 @@ Optional features
               from a directory of individual reviewer text files.  Reviewer
               names are replaced by "Reviewer 1", "Reviewer 2", etc. and
               internal (#) comment lines are removed.
+--tex-only    Only produce the LaTeX files (requires --split-tex); skip
+              writing the .docx output entirely.
 --suffix-file Append the contents of a plain-text file (e.g. the grading-scale
               boilerplate) to every email.
 """
@@ -166,6 +168,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help=(
             "Directory in which to write per-proposal LaTeX files "
             "(<legacycode>_<evncode>.tex).  Requires --reviews-dir."
+        ),
+    )
+    parser.add_argument(
+        "--tex-only",
+        action="store_true",
+        default=False,
+        help=(
+            "Only produce the LaTeX files (requires --split-tex); "
+            "skip writing the .docx output entirely."
         ),
     )
     parser.add_argument(
@@ -986,6 +997,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
     print(f"Parsed {len(summaries)} proposals from {args.assessment}")
 
+    # Validate --tex-only usage
+    if args.tex_only and args.split_tex is None:
+        print("--tex-only requires --split-tex.", file=sys.stderr)
+        return 1
+
     # Load suffix
     suffix_text = ""
     if args.suffix_file:
@@ -994,9 +1010,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 1
         suffix_text = read_text(args.suffix_file).strip()
 
-    # Build the .docx
-    build_email_docx(summaries, suffix_text, args.output,
-                     assignments=assignments, session=args.session)
+    # Build the .docx (unless --tex-only was requested)
+    if not args.tex_only:
+        build_email_docx(summaries, suffix_text, args.output,
+                         assignments=assignments, session=args.session)
 
     # --split-tex: generate per-proposal LaTeX files
     if args.split_tex is not None:
