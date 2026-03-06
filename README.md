@@ -41,6 +41,7 @@ Edit the `SESSION` variable at the top of the script to match the current observ
 | `primary` | `latex` | Generate a LaTeX summary of primary reviews. |
 | `secondary` | `rename` | Rename secondary review files from the Google Sheets CSV. |
 | `secondary` | `reminder` | Preview reminder emails for outstanding secondary reviews (add `--send` to actually send). |
+| `secondary` | `latex` | Generate a LaTeX summary of secondary reviews. |
 | `all` | `rename` | Rename all review files from the CSV. |
 | `all` | `reminder` | Preview reminder emails for all outstanding reviews (add `--send` to actually send). |
 | `all` | `latex` | Generate the combined LaTeX review summary. |

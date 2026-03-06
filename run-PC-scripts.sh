@@ -10,6 +10,7 @@ usage() {
     echo "  primary   latex              -- generate primary review LaTeX summary"
     echo "  secondary rename             -- rename secondary reviews from CSV"
     echo "  secondary reminder [--send]  -- send secondary review reminders (dry-run by default)"
+    echo "  secondary latex              -- generate secondary review LaTeX summary"
     echo "  all       rename             -- rename all reviews from CSV"
     echo "  all       reminder [--send]  -- send all review reminders (dry-run by default)"
     echo "  all       latex          -- generate all-review LaTeX summary"
@@ -92,7 +93,7 @@ case "$SECTION" in
         ;;
       latex)
         $PY_EXEC ${SCRIPTS_DIR}/reviews_to_latex.py \
-          -r econdary_pc_reviews -o review_secondary_summary.tex -a reviewer_assignments.txt
+          -r secondary_pc_reviews -o review_secondary_summary.tex -a reviewer_assignments.txt
         ;;
       *)
         echo "Unknown command '$CMD' for section 'secondary'."
