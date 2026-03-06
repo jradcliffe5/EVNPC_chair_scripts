@@ -8,6 +8,13 @@ Utility scripts to help the EVN Programme Committee chair prepare reviewer templ
 - Proposal PDFs exported from the EVN submission system.
 - Optional: a current list of PC members in `EVN_pc_members.txt` (`Name Email` per line, plus optional `E25A001#1` fixed preferences).
 
+### Additional packages for `supplement_meeting_notes.py`
+```
+pip install python-docx mlx-whisper
+```
+- `mlx-whisper` is only needed if transcribing audio files (Apple Silicon).
+- AI synthesis requires the `claude` CLI (Claude Code) to be installed and on `PATH`.
+
 ## Quick start — `run-PC-scripts.sh`
 
 The shell script `run-PC-scripts.sh` is the primary interface for the full PC-chair workflow. It wraps all Python scripts with the correct arguments for a given session. Before running, set the required environment variables:
@@ -38,6 +45,7 @@ Edit the `SESSION` variable at the top of the script to match the current observ
 | `all` | `reminder` | Preview reminder emails for all outstanding reviews (add `--send` to actually send). |
 | `all` | `latex` | Generate the combined LaTeX review summary. |
 | `feedback` | | Generate draft feedback `.docx`. Add `--split-tex` to also write per-proposal LaTeX files. |
+| `feedback` | `reminder` | Preview reminder emails for PC members with missing feedback summaries (add `--send` to actually send). |
 
 ## Typical workflow
 
@@ -174,6 +182,46 @@ python generate_feedback_emails.py \
 ```
 
 This produces a `.docx` with one draft email per page (including a TOC), with primary/secondary reviewer names annotated as Word comments. With `--split-tex`, it also writes per-proposal standalone LaTeX files to the specified directory.
+
+### 5b. Send feedback reminders
+
+After distributing draft feedback emails, send reminders to PC members who have not yet returned their feedback summaries:
+
+```bash
+./run-PC-scripts.sh feedback reminder
+# add --send to actually send:
+./run-PC-scripts.sh feedback reminder --send
+```
+
+Or directly:
+```bash
+python review_reminder.py \
+  --feedback-docx EVNPC_2026A_feedback.docx \
+  --assignments reviewer_assignments.txt \
+  --pc-members EVN_pc_members.txt \
+  --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APPPWD \
+  [--dry-run]
+```
+
+### 6. Supplement meeting notes
+
+After the PC meeting, supplement the agenda/notes DOCX with content from Zoom closed captions, the chat log, and/or audio recordings. Claude synthesises the sources and inserts contextual notes inline:
+
+```bash
+python supplement_meeting_notes.py EVNPC_2026A_agenda.docx \
+  --captions closed_caption.txt \
+  --chat chat.txt \
+  --audio audio1.m4a audio2.m4a
+```
+
+This produces `EVNPC_2026A_agenda_supplemented.docx` with colour-coded inline notes (captions = blue, chat = purple, audio = green).
+
+Key options:
+- `--output FILE` — custom output path
+- `--model MODEL` — Whisper model for transcription (default: `mlx-community/whisper-large-v3-turbo`)
+- `--no-ai` — skip Claude synthesis; just append full transcripts as a new section
+
+Audio transcripts are cached as `<audio>.transcript.txt` alongside the source file, so re-runs do not re-transcribe.
 
 ## Additional notes
 

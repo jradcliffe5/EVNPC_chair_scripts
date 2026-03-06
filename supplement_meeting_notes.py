@@ -30,7 +30,7 @@ Example:
 """
 
 import argparse
-import os
+import subprocess
 import sys
 import json
 import re
@@ -103,41 +103,43 @@ Output format:
 """
 
 
-def call_claude(notes_text, supplementary_sources, api_key):
-    """Call Claude API to synthesise supplementary notes."""
-    try:
-        import anthropic
-    except ImportError:
-        print("anthropic package not installed. Run: pip install anthropic", file=sys.stderr)
+def call_claude(notes_text, supplementary_sources):
+    """Call Claude via the Claude Code CLI to synthesise supplementary notes."""
+    import shutil
+    if not shutil.which("claude"):
+        print("  'claude' CLI not found. Ensure Claude Code is installed and on PATH.", file=sys.stderr)
         return []
-
-    client = anthropic.Anthropic(api_key=api_key)
 
     sources_block = ""
     for label, content in supplementary_sources.items():
         if content:
-            # Truncate very long sources to avoid token limits
             truncated = content[:40000] if len(content) > 40000 else content
             sources_block += f"\n\n=== {label.upper()} ===\n{truncated}"
 
-    user_message = f"""MEETING NOTES:
+    prompt = f"""{SYSTEM_PROMPT}
+
+MEETING NOTES:
 {notes_text[:20000]}
 
 SUPPLEMENTARY SOURCES:{sources_block}
 
 Please produce the JSON insertion list as described."""
 
-    print("  Calling Claude API for intelligent synthesis...")
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=8192,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
+    print("  Calling Claude CLI for intelligent synthesis...")
+    result = subprocess.run(
+        ["claude", "-p"],
+        input=prompt,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
 
-    response_text = message.content[0].text.strip()
+    if result.returncode != 0:
+        print(f"  Claude CLI error: {result.stderr.strip()}", file=sys.stderr)
+        return []
 
-    # Extract JSON from response
+    response_text = result.stdout.strip()
+
     json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
     if json_match:
         try:
@@ -256,7 +258,6 @@ def main():
     parser.add_argument("--output", help="Output DOCX path")
     parser.add_argument("--model", default="mlx-community/whisper-large-v3-turbo",
                         help="Whisper model for transcription")
-    parser.add_argument("--api-key", help="Anthropic API key (or set ANTHROPIC_API_KEY env var)")
     parser.add_argument("--no-ai", action="store_true",
                         help="Skip Claude AI; just append transcripts to document")
     args = parser.parse_args()
@@ -313,19 +314,13 @@ def main():
     notes_text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
     # ── synthesise with Claude or append raw ──
-    if not args.no_ai:
-        api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            print("No API key found. Set ANTHROPIC_API_KEY or use --api-key. Falling back to --no-ai mode.")
-            args.no_ai = True
-
     if args.no_ai:
         print("Appending full transcripts to document (no-AI mode)...")
         append_full_transcripts(doc, supplementary_sources)
         total_inserted = sum(len(v.splitlines()) for v in supplementary_sources.values())
         print(f"Appended {len(supplementary_sources)} source(s).")
     else:
-        insertions = call_claude(notes_text, supplementary_sources, api_key)
+        insertions = call_claude(notes_text, supplementary_sources)
         if insertions:
             print(f"  Got {len(insertions)} insertion suggestions from Claude.")
             n = apply_insertions(doc, insertions)

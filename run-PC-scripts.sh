@@ -13,7 +13,8 @@ usage() {
     echo "  all       rename             -- rename all reviews from CSV"
     echo "  all       reminder [--send]  -- send all review reminders (dry-run by default)"
     echo "  all       latex          -- generate all-review LaTeX summary"
-    echo "  feedback  [--split-tex]  -- generate draft feedback emails .docx (optionally split per-proposal .tex)"
+    echo "  feedback  [--split-tex]  -- generate draft feedback emails .docx (optionally split per-proposal .tex)
+  feedback  reminder [--send]  -- send reminders to PC members with missing feedback summaries"
 }
 
 SESSION="2026A"
@@ -130,18 +131,33 @@ case "$SECTION" in
     ;;
 
   feedback)
-    SPLIT_TEX_ARGS=""
-    if [ "$CMD" = "--split-tex" ]; then
-      SPLIT_TEX_ARGS="--split-tex feedback_tex/ --reviews-dir all_pc_reviews"
-    fi
-    $PY_EXEC ${SCRIPTS_DIR}/generate_feedback_emails.py \
-      -a "EVNPC_${SESSION}_assessment.txt" \
-      -m evn_code_mapping.txt \
-      -r reviewer_assignments.txt \
-      -o "EVNPC_${SESSION}_feedback.docx" \
-      --suffix-file evn_pc_suffix_content.txt \
-      --session "${SESSION}" \
-      $SPLIT_TEX_ARGS
+    case "$CMD" in
+      reminder)
+        $PY_EXEC ${SCRIPTS_DIR}/review_reminder.py \
+          --feedback-docx "EVNPC_${SESSION}_feedback.docx" \
+          --assignments reviewer_assignments.txt \
+          --pc-members EVN_pc_members.txt \
+          --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APPPWD $DRY_RUN
+        ;;
+      *)
+        read -rp "This will overwrite EVNPC_${SESSION}_feedback.docx. Type 'yes' to confirm: " CONFIRM
+        if [ "$CONFIRM" != "yes" ]; then
+          echo "Aborted."; exit 1
+        fi
+        SPLIT_TEX_ARGS=""
+        if [ "$CMD" = "--split-tex" ]; then
+          SPLIT_TEX_ARGS="--split-tex feedback_tex/ --reviews-dir all_pc_reviews"
+        fi
+        $PY_EXEC ${SCRIPTS_DIR}/generate_feedback_emails.py \
+          -a "EVNPC_${SESSION}_assessment.txt" \
+          -m evn_code_mapping.txt \
+          -r reviewer_assignments.txt \
+          -o "EVNPC_${SESSION}_feedback.docx" \
+          --suffix-file evn_pc_suffix_content.txt \
+          --session "${SESSION}" \
+          $SPLIT_TEX_ARGS
+        ;;
+    esac
     ;;
 
   *)
