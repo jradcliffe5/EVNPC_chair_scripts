@@ -21,9 +21,9 @@ usage() {
 
 SESSION="2026A"
 
-SCRIPTS_DIR="../../pc_chair/EVNPC_chair_scripts"                                                                                                                                                                                                                
+SCRIPTS_DIR="/Users/jackradcliffe/Library/CloudStorage/GoogleDrive-jack.f.radcliffe@gmail.com/My Drive/Astro/evn_pc/pc_chair/EVNPC_chair_scripts"                                                                                                                                                                                                                
 SHEETS_URL=$EVNPC_SHEETS
-REVIEWS_SOURCE_DIR="../../pc_chair/Copy of EVN programme committee review submission (File responses)/Review submission (File responses)"   
+REVIEWS_SOURCE_DIR="/Users/jackradcliffe/Library/CloudStorage/GoogleDrive-jack.f.radcliffe@gmail.com/My Drive/Astro/evn_pc/pc_chair/EVN_PC_review_submission_form (File responses)/Please upload your review here (File responses)"   
 PY_EXEC="$HOME/.pyenv/versions/3.13.7/bin/python"
 
 SECTION=$1
