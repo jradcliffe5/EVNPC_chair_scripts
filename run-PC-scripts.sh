@@ -17,23 +17,31 @@ usage() {
     echo "  feedback  [--split-tex]  -- generate draft feedback emails .docx (optionally split per-proposal .tex)"
   echo "  feedback  --tex-only     -- generate per-proposal .tex files only (no .docx written)"
   echo "  feedback  reminder [--send]  -- send reminders to PC members with missing feedback summaries"
+  echo "  feedback  send    [--draft|--send]  -- feedback emails to PIs: dry-run (default), save as Gmail draft, or send"
 }
 
 SESSION="2026A"
 
-SCRIPTS_DIR="/Users/jackradcliffe/Library/CloudStorage/GoogleDrive-jack.f.radcliffe@gmail.com/My Drive/Astro/evn_pc/pc_chair/EVNPC_chair_scripts"                                                                                                                                                                                                                
+SCRIPTS_DIR="../../pc_chair/EVNPC_chair_scripts"                                                                                                                                                                                                                
 SHEETS_URL=$EVNPC_SHEETS
-REVIEWS_SOURCE_DIR="/Users/jackradcliffe/Library/CloudStorage/GoogleDrive-jack.f.radcliffe@gmail.com/My Drive/Astro/evn_pc/pc_chair/EVN_PC_review_submission_form (File responses)/Please upload your review here (File responses)"   
+REVIEWS_SOURCE_DIR="../../pc_chair/Copy of EVN programme committee review submission (File responses)/Review submission (File responses)"   
 PY_EXEC="$HOME/.pyenv/versions/3.13.7/bin/python"
 
 SECTION=$1
 CMD=$2
 FLAG=$3
 
-# --send removes --dry-run from reminder commands
+# --send / --draft control delivery mode for reminder and feedback send commands
 DRY_RUN="--dry-run"
 if [ "$FLAG" = "--send" ]; then
   DRY_RUN=""
+fi
+# For feedback send, --draft is passed through directly to the Python script
+FEEDBACK_SEND_MODE="$DRY_RUN"
+if [ "$FLAG" = "--draft" ]; then
+  FEEDBACK_SEND_MODE="--draft"
+elif [ "$FLAG" = "--send" ]; then
+  FEEDBACK_SEND_MODE="--send"
 fi
 
 case "$SECTION" in
@@ -48,7 +56,8 @@ case "$SECTION" in
       --reviewers-per-proposal 7 --max-first-per-member 3 --max-second-per-member 3 \
       --max-per-member 15 --member-summary assignment_summary.html \
       --science-tags-file science-tags.txt --prefer-matching-tags \
-      -A "EVNPC_${SESSION}_agenda.docx" -v
+      --pi-emails-file "EVNPC_${SESSION}_pi_emails.txt" \
+      -A "EVNPC_${SESSION}_agenda.docx"
     ;;
 
   primary)
@@ -134,6 +143,14 @@ case "$SECTION" in
 
   feedback)
     case "$CMD" in
+      send)
+        $PY_EXEC ${SCRIPTS_DIR}/send_feedback_emails.py \
+          --feedback-docx "EVNPC_${SESSION}_feedback.docx" \
+          --pi-emails-file "EVNPC_${SESSION}_pi_emails.txt" \
+          --pdf-dir feedback_tex/ \
+          --code-mapping evn_code_mapping.txt \
+          --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APPPWD $FEEDBACK_SEND_MODE
+        ;;
       reminder)
         $PY_EXEC ${SCRIPTS_DIR}/review_reminder.py \
           --feedback-docx "EVNPC_${SESSION}_feedback.docx" \

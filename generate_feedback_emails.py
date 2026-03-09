@@ -409,6 +409,22 @@ def parse_assessment_file(
 # Parse individual reviews for --split-tex
 # ---------------------------------------------------------------------------
 
+def _tokenise(name: str) -> set:
+    """Return a set of lowercase ASCII tokens from a name, ignoring titles."""
+    _TITLES = {"dr", "prof", "professor", "mr", "mrs", "ms", "dr."}
+    nfkd = unicodedata.normalize("NFKD", name)
+    ascii_name = nfkd.encode("ascii", "ignore").decode()
+    tokens = set(re.split(r"[\s,.\-]+", ascii_name.lower()))
+    return tokens - _TITLES - {""}
+
+
+def _names_match(csv_name: str, file_name: str) -> bool:
+    """True if file_name tokens are a subset of csv_name tokens (or equal)."""
+    csv_toks = _tokenise(csv_name)
+    file_toks = _tokenise(file_name)
+    return bool(file_toks) and file_toks <= csv_toks
+
+
 def parse_individual_review_file(
     path: Path,
     assignments: Dict[str, List[str]],
@@ -436,7 +452,7 @@ def parse_individual_review_file(
         ordered = assignments.get(code, [])
         label = "Reviewer ?"
         for idx, name in enumerate(ordered, start=1):
-            if name.lower() == reviewer_name.lower():
+            if _names_match(name, reviewer_name):
                 label = f"Reviewer {idx}"
                 break
 
@@ -495,6 +511,13 @@ def load_all_individual_reviews(
         return int(m.group()) if m else 999
     for code in combined:
         combined[code].sort(key=label_key)
+        # Assign sequential numbers to unmatched reviewers
+        used = {label_key(r) for r in combined[code] if r.reviewer_label != "Reviewer ?"}
+        next_num = max(used, default=0) + 1
+        for r in combined[code]:
+            if r.reviewer_label == "Reviewer ?":
+                r.reviewer_label = f"Reviewer {next_num}"
+                next_num += 1
     return combined
 
 
@@ -591,10 +614,6 @@ def build_proposal_tex(
     lines.append("")
     for review in individual_reviews:
         lines.append(rf"\subsection*{{{latex_escape(review.reviewer_label)}}}")
-        if review.grade:
-            lines.append(rf"\textbf{{Grade:}} {latex_escape(review.grade)}\\")
-        if review.time_recommended:
-            lines.append(rf"\textbf{{Time recommended:}} {latex_escape(review.time_recommended)}\\")
 
         for label, attr in (
             ("General remark", "general_remark"),

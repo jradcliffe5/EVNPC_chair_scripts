@@ -406,14 +406,46 @@ def parse_applicants(lines: Sequence[str]) -> List[dict[str, str]]:
             if current:
                 rows.append(current)
             current = {keys[idx]: parts[idx].strip() for idx in range(len(keys))}
+        elif len(parts) == len(keys) - 1:
+            # Row with one column absent (e.g. no Potential Observer entry).
+            if current:
+                rows.append(current)
+            current = {key: "" for key in keys}
+            for idx in range(len(parts)):
+                current[keys[idx]] = parts[idx].strip()
         else:
             if current is None:
                 current = {key: "" for key in keys}
             if len(parts) == 1:
-                current["affiliation"] = " ".join(filter(None, [current.get("affiliation"), parts[0].strip()]))
+                fragment = parts[0].strip()
+                email_so_far = current.get("email", "")
+                # A wrapped domain suffix (e.g. "uk" or "ter.ac.uk" from
+                # "postgrad.manchester.ac.uk") should be appended to a partial email
+                # rather than treated as an affiliation continuation.
+                # Heuristic: all-lowercase with dots/hyphens/digits, and either
+                # contains a "." or is short (≤4 chars) like a bare TLD.
+                if (email_so_far and "@" in email_so_far
+                        and re.match(r'^\.?[a-z0-9][a-z0-9.-]*$', fragment)
+                        and ("." in fragment or len(fragment.lstrip(".")) <= 4)):
+                    # Direct concatenation — PDF column truncates mid-character,
+                    # so no separator is needed; the fragment picks up exactly
+                    # where the truncated string left off.
+                    current["email"] = email_so_far + fragment
+                else:
+                    current["affiliation"] = " ".join(filter(None, [current.get("affiliation"), fragment]))
             elif len(parts) == 2:
                 current["affiliation"] = " ".join(filter(None, [current.get("affiliation"), parts[0].strip()]))
-                current["email"] = " ".join(filter(None, [current.get("email"), parts[1].strip()]))
+                email_so_far = current.get("email", "")
+                part1 = parts[1].strip()
+                # Same domain-suffix heuristic as the 1-part branch: if the
+                # current email is partial and parts[1] looks like a domain
+                # fragment (no @, all lowercase/dots/hyphens), concatenate.
+                if (email_so_far and "@" in email_so_far
+                        and re.match(r'^\.?[a-z0-9][a-z0-9.-]*$', part1)
+                        and ("." in part1 or len(part1.lstrip(".")) <= 4)):
+                    current["email"] = email_so_far + part1
+                else:
+                    current["email"] = " ".join(filter(None, [email_so_far, part1]))
             else:
                 current["potential"] = " ".join(filter(None, [current.get("potential"), " ".join(parts).strip()]))
         i += 1
@@ -439,6 +471,47 @@ def parse_contact_name(lines: Sequence[str]) -> Optional[str]:
             continue
         if parts[0].lower() == "name" and len(parts) > 1:
             return parts[1].strip()
+    return None
+
+
+def _best_email(raw: str) -> Optional[str]:
+    """Return the most plausible email address from a (potentially garbled) string.
+
+    PDF layout wrapping can concatenate multiple fragments into the email field,
+    e.g. 'ter.ac.uk 7@manchester.ac.uk lasheras@soton.ac.uk'.  We pick the
+    candidate whose local part (before '@') is longest, as short local parts
+    like '7' are artefacts of a wrapped previous token.
+    """
+    candidates: List[Tuple[int, str]] = []
+    for token in raw.split():
+        token = token.strip(".,;()<>[]")
+        if "@" not in token:
+            continue
+        local, _, domain = token.partition("@")
+        if local and "." in domain:
+            candidates.append((len(local), token))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: -x[0])
+    return candidates[0][1]
+
+
+def parse_contact_email(lines: Sequence[str]) -> Optional[str]:
+    """Extract the contact author email from the dedicated Contact Author section."""
+    try:
+        start = lines.index("Contact Author")
+    except ValueError:
+        return None
+
+    for idx in range(start + 1, min(start + 15, len(lines))):
+        stripped = lines[idx].strip()
+        if not stripped:
+            continue
+        parts = [p for p in re.split(r"\s{2,}", stripped) if p]
+        if not parts:
+            continue
+        if parts[0].lower() == "email" and len(parts) > 1:
+            return _best_email(parts[1].strip()) or None
     return None
 
 
@@ -1076,6 +1149,19 @@ def write_science_tags(proposals: Sequence[Dict[str, Any]], destination: Path) -
     destination.write_text(content, encoding="utf-8")
 
 
+def write_pi_emails(proposals: Sequence[Dict[str, Any]], destination: Path) -> None:
+    """Write PI email addresses per proposal for post-assessment feedback."""
+    lines: List[str] = []
+    for proposal in proposals:
+        email = proposal.get("pi_email") or ""
+        lines.append(f"{proposal['exp']}: {email}")
+    content = "\n".join(lines)
+    if not content.endswith("\n"):
+        content += "\n"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(content, encoding="utf-8")
+
+
 DOCX_XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
 WORDPROCESSING_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -1463,12 +1549,21 @@ def parse_proposal(path: Path) -> Dict[str, Any]:
     normalised_text = f" {normalise_name(' '.join(lines))} "
 
     applicants = parse_applicants(lines)
-    pi = next(
-        (row["name"] for row in applicants if "pi" in row.get("potential", "").lower()),
+    pi_row = next(
+        (row for row in applicants if any(
+            v.strip().lower() in {"pi", "p.i."}
+            for v in row.values()
+        )),
         None,
     )
-    if not pi and applicants:
-        pi = applicants[0].get("name")
+    if pi_row is None and applicants:
+        pi_row = applicants[0]
+    pi = pi_row.get("name") if pi_row else None
+    pi_email_raw = pi_row.get("email", "").strip() if pi_row else ""
+    # The Contact Author section has labelled fields and is more reliably parsed
+    # than the fixed-width Applicants table (where column overlap can corrupt the
+    # email field).  Prefer it; fall back to the applicant-table value.
+    pi_email: Optional[str] = parse_contact_email(lines) or _best_email(pi_email_raw)
     if not pi:
         pi = pi_hint or parse_contact_name(lines) or "Unknown"
 
@@ -1496,6 +1591,7 @@ def parse_proposal(path: Path) -> Dict[str, Any]:
     return {
         "exp": exp,
         "pi": pi,
+        "pi_email": pi_email,
         "title": title,
         "nets": nets,
         "lambda": lambdas,
@@ -1635,6 +1731,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--prefer-matching-tags",
         action="store_true",
         help="Prefer matching primary reviewers whose expertise tags overlap the proposal science tags.",
+    )
+    parser.add_argument(
+        "--pi-emails-file",
+        type=Path,
+        help="Write PI email addresses per proposal to this file (for post-assessment feedback).",
     )
     args = parser.parse_args(argv)
     global VERBOSE
@@ -1808,6 +1909,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             write_science_tags(proposals, args.science_tags_file)
         except OSError as exc:
             print(f"Failed to write science tags file: {exc}", file=sys.stderr)
+            return 1
+
+    if args.pi_emails_file:
+        try:
+            log_verbose(f"Writing PI emails to {args.pi_emails_file}.")
+            write_pi_emails(proposals, args.pi_emails_file)
+        except OSError as exc:
+            print(f"Failed to write PI emails file: {exc}", file=sys.stderr)
             return 1
 
     return 0
