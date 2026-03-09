@@ -48,6 +48,7 @@ Edit the `SESSION` variable at the top of the script to match the current observ
 | `feedback` | | Generate draft feedback `.docx`. Add `--split-tex` to also write per-proposal LaTeX files. |
 | `feedback` | `--tex-only` | Write per-proposal LaTeX files only — no `.docx` is produced. |
 | `feedback` | `reminder` | Preview reminder emails for PC members with missing feedback summaries (add `--send` to actually send). |
+| `feedback` | `send` | Preview feedback emails to PIs (dry-run). Add `--draft` to save as Gmail drafts, or `--send` to deliver. |
 
 ## Typical workflow
 
@@ -77,6 +78,7 @@ This produces:
 - `reviewer_assignments.txt` — CSV of reviewer allocations
 - `assignment_summary.html` — per-reviewer summary table (paste into Outlook)
 - `science-tags.txt` — inferred science categories per proposal
+- `EVNPC_2026A_pi_emails.txt` — `CODE: email` file used later by `send_feedback_emails.py`
 
 Key options:
 - `--reviewers-per-proposal N` — number of reviewers per proposal (default: 2)
@@ -207,6 +209,48 @@ python review_reminder.py \
   --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APPPWD \
   [--dry-run]
 ```
+
+### 5c. Send feedback emails to PIs
+
+Once the feedback `.docx` has been reviewed and all placeholders filled in, compile the per-proposal PDFs and send the emails to PIs.
+
+Preview (dry-run, no emails sent):
+```bash
+./run-PC-scripts.sh feedback send
+```
+
+Save as Gmail drafts (review in your Drafts folder before sending):
+```bash
+./run-PC-scripts.sh feedback send --draft
+```
+
+Send:
+```bash
+./run-PC-scripts.sh feedback send --send
+```
+
+Or directly:
+```bash
+python send_feedback_emails.py \
+  --feedback-docx EVNPC_2026A_feedback.docx \
+  --pi-emails-file EVNPC_2026A_pi_emails.txt \
+  --pdf-dir feedback_tex/ \
+  --code-mapping evn_code_mapping.txt \
+  --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APPPWD \
+  [--dry-run | --draft | --send]
+```
+
+The script automatically compiles any stale `.tex` files in `--pdf-dir` using `pdflatex` before sending. Each email includes a plain-text and HTML body (preserving bold/italic from the `.docx`) and the compiled PDF as an attachment. Proposals with unresolved choice placeholders (e.g. `[was / was not]`) are skipped automatically.
+
+Key options:
+- `--proposals CODE ...` — send only for specific proposal codes (useful for testing or resending individual emails)
+- `--skip-compile` — skip LaTeX compilation if PDFs are already up-to-date
+- `--sent-log FILE` — JSON log tracking which emails have been delivered; proposals already in the log are skipped on re-runs
+- `--force` — resend even if a proposal is already recorded in the sent log
+- `--draft` — save to Gmail Drafts via IMAP instead of sending
+- `--cc ADDRESS` — add CC recipients (may be repeated)
+- `--reply-to ADDRESS` — set a Reply-To header
+- `--export-emails DIR` — save each email as a `.eml` file
 
 ### 6. Supplement meeting notes
 
