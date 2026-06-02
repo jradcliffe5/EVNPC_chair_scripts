@@ -201,6 +201,30 @@ SCIENCE_CATEGORY_RULES: Dict[str, Tuple[Tuple[str, str, int], ...]] = {
         ("keyword", "remnant", 2),
         ("keyword", "nova remnant", 3),
     ),
+    "Pulsar": (
+        ("regex", r"\bpulsar(s)?\b", 4),
+        ("regex", r"\bpsr\b", 3),
+        ("keyword", "pulsar timing", 4),
+        ("keyword", "scintillation", 3),
+        ("keyword", "dispersion measure", 3),
+        ("keyword", "magnetar", 3),
+        ("keyword", "neutron star", 2),
+        ("keyword", "millisecond pulsar", 3),
+        ("keyword", "msp", 2),
+        ("keyword", "timing noise", 2),
+        ("keyword", "interstellar medium", 1),
+    ),
+    "Astrometry": (
+        ("keyword", "astrometry", 4),
+        ("keyword", "proper motion", 3),
+        ("keyword", "parallax", 3),
+        ("keyword", "reference frame", 3),
+        ("keyword", "icrf", 3),
+        ("keyword", "geodesy", 3),
+        ("keyword", "tropospheric", 2),
+        ("regex", r"\b(μas|microarcsecond)\b", 3),
+        ("regex", r"\bmas\s+precision\b", 2),
+    ),
 }
 SCIENCE_CATEGORY_ALIAS_TERMS: Dict[str, str] = {
     "galactic": "Galactic",
@@ -236,6 +260,20 @@ SCIENCE_CATEGORY_ALIAS_TERMS: Dict[str, str] = {
     "supernovae": "Supernovae",
     "snr": "Supernovae",
     "remnant": "Supernovae",
+    "pulsar": "Pulsar",
+    "pulsars": "Pulsar",
+    "psr": "Pulsar",
+    "scintillation": "Pulsar",
+    "magnetar": "Pulsar",
+    "neutron star": "Pulsar",
+    "millisecond pulsar": "Pulsar",
+    "msp": "Pulsar",
+    "astrometry": "Astrometry",
+    "proper motion": "Astrometry",
+    "parallax": "Astrometry",
+    "reference frame": "Astrometry",
+    "icrf": "Astrometry",
+    "geodesy": "Astrometry",
     "other": "Other",
 }
 SCIENCE_CATEGORY_MIN_SCORE = 3
@@ -256,8 +294,6 @@ def normalise_name(name: str) -> str:
 def infer_science_categories(title: str, lines: Sequence[str]) -> List[str]:
     """Return a list of science categories inferred from free text and declared fields."""
     declared = _extract_declared_science_categories(lines)
-    if declared:
-        return declared
 
     haystack_parts = [title.lower()]
     haystack_parts.extend(line.lower() for line in lines if line.strip())
@@ -272,6 +308,22 @@ def infer_science_categories(title: str, lines: Sequence[str]) -> List[str]:
             elif rule_type == "regex":
                 if re.search(pattern, haystack):
                     scores[category] += weight
+
+    if declared:
+        # Also add any category whose keyword fires strongly in the title alone,
+        # so a title like "Pulsar timing..." isn't lost when the declared field says "Galactic".
+        title_lower = title.lower()
+        title_scores: Dict[str, int] = {category: 0 for category in SCIENCE_CATEGORY_RULES}
+        for category, rules in SCIENCE_CATEGORY_RULES.items():
+            for rule_type, pattern, weight in rules:
+                if rule_type == "keyword":
+                    if pattern in title_lower:
+                        title_scores[category] += weight
+                elif rule_type == "regex":
+                    if re.search(pattern, title_lower):
+                        title_scores[category] += weight
+        title_extras = [cat for cat, value in title_scores.items() if value >= SCIENCE_CATEGORY_MIN_SCORE]
+        return sorted(set(declared) | set(title_extras))
 
     selected = [cat for cat, value in scores.items() if value >= SCIENCE_CATEGORY_MIN_SCORE]
     if not selected:
@@ -1149,6 +1201,22 @@ def write_science_tags(proposals: Sequence[Dict[str, Any]], destination: Path) -
     destination.write_text(content, encoding="utf-8")
 
 
+def read_science_tags_file(source: Path) -> Dict[str, List[str]]:
+    """Read a science-tags file and return a mapping of proposal code → tag list."""
+    overrides: Dict[str, List[str]] = {}
+    for raw_line in source.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        code, _, tag_str = line.partition(":")
+        tags = [t.strip() for t in tag_str.split(",") if t.strip()]
+        if code.strip() and tags:
+            overrides[code.strip()] = tags
+    return overrides
+
+
 def write_pi_emails(proposals: Sequence[Dict[str, Any]], destination: Path) -> None:
     """Write PI email addresses per proposal for post-assessment feedback."""
     lines: List[str] = []
@@ -1779,6 +1847,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         proposal["pdf_path"] = str(path)
         proposals.append(proposal)
 
+    # Apply manual science-tag overrides from the tags file if it already exists.
+    if args.science_tags_file and args.science_tags_file.is_file():
+        try:
+            tag_overrides = read_science_tags_file(args.science_tags_file)
+            for proposal in proposals:
+                if proposal["exp"] in tag_overrides:
+                    proposal["science_tags"] = tag_overrides[proposal["exp"]]
+            log_verbose(f"Applied science-tag overrides from {args.science_tags_file}.")
+        except OSError as exc:
+            print(f"Failed to read science tags file: {exc}", file=sys.stderr)
+            return 1
+
     member_assignments: Optional[Dict[str, List[Tuple[str, str]]]] = None
     role_labels: Optional[List[str]] = None
     manual_conflicts: Dict[str, Set[str]] = {}
@@ -1826,6 +1906,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     file=sys.stderr,
                 )
                 return 1
+        # Process proposals with the fewest matching-tag members first so specialised
+        # reviewers (e.g. the sole Pulsar expert) are not consumed by earlier proposals.
+        if args.prefer_matching_tags and member_tags:
+            original_order = {p["exp"]: i for i, p in enumerate(proposals)}
+
+            def _match_count(proposal: Dict[str, Any]) -> tuple:
+                ptags = set(proposal.get("science_tags") or [])
+                if not ptags:
+                    return (member_count, original_order[proposal["exp"]])
+                n = sum(1 for tags in member_tags.values() if tags & ptags)
+                return (n if n > 0 else member_count, original_order[proposal["exp"]])
+
+            proposals.sort(key=_match_count)
+
         try:
             role_labels = generate_role_labels(args.reviewers_per_proposal)
             log_verbose(

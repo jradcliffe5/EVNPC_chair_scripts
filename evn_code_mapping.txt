@@ -1,0 +1,23 @@
+E26A001  EC107  JH.Chen       Jet-BLR in super-Edd. SMBH
+E26A002  EV030  Varma         Variable methanol masers            eMRL
+E26A003  EX011  WC.Xu         kpc-scale triple AGN               MeerKAT
+E26A004  EG144  Garcia-Miro   Short-lived IMBH jet             MeerKAT;  Ro 
+E26A005  EZ041  Zafar         Origin QSR radio brightening 
+E26A006  EW056  Wills         IMBH M82 X-1 radio/X-ray variab.    eMRL
+E26A007  EG145  Giroletti     EP GRB afterglows
+E26A008  EG146  Giarratana    (GW) Compact binary mergers         eMRL 
+E26A009  EN019  Nyamai        Galactic novae                   MeerKAT; eMRL
+E26A010  ES124  YQ.Song       30GHz-peaker in dusty starburst 
+E26A011  EB118  Bruni         Onset emission new/flaring AGN       KVN
+E26A012  EC108  N.Chang       Local analogs little red dots       eMRL
+E26A013  EC109  XP.Cheng      NGC2146 compact flare             eMRL;  Ro
+E26A014  EP136  Pelliciari    Origin PRS                          eMRL 
+E26A015  EA082  Akimoto       IRAS19296 circumstellar envelope    eMRL
+E26A016  EG147  Errando/Giroletti      Intergal B via Fermi blazar jets
+E26A017  EZ042  YH.Zhang      Delayed flare in nearby TDE
+E26A018  EB119  Bruni         (Trigg) search compact PRS
+E26A019  ES125  HC.Ding/XW.Shu      Fast rise/slow decay BOT
+E26A020  ES126  YC.Sun        Compact dual SMBH
+E26A021  EP137  Perez-Torres  HD22042: bound or background
+G26A001  GS047  Stock   Scintellometry msPR J0437           MeerKAT; GMRT; LBA
+G26A002  GS048  Stock   PSR scintell Gum nebula/Vela shell  MeerKAT; GMRT; LBA
