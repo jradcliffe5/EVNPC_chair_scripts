@@ -172,6 +172,18 @@ SCIENCE_CATEGORY_RULES: Dict[str, Tuple[Tuple[str, str, int], ...]] = {
         ("keyword", "h i", 2),
         ("regex", r"\b21\s*cm\b", 2),
     ),
+    "Maser": (
+        ("keyword", "maser", 4),
+        ("keyword", "masers", 4),
+        ("keyword", "megamaser", 4),
+        ("keyword", "ohm", 3),
+        ("keyword", "oh maser", 4),
+        ("keyword", "water maser", 4),
+        ("keyword", "h2o maser", 4),
+        ("keyword", "methanol maser", 4),
+        ("keyword", "lirg", 2),
+        ("keyword", "ulirg", 2),
+    ),
     "Transient": (
         ("keyword", "transient", 3),
         ("keyword", "transients", 3),
@@ -241,10 +253,16 @@ SCIENCE_CATEGORY_ALIAS_TERMS: Dict[str, str] = {
     "spectral line": "Spectral Line",
     "spectralline": "Spectral Line",
     "line emission": "Spectral Line",
-    "maser": "Spectral Line",
     "molecular line": "Spectral Line",
     "molecularline": "Spectral Line",
     "hi": "Spectral Line",
+    "maser": "Maser",
+    "masers": "Maser",
+    "megamaser": "Maser",
+    "ohm": "Maser",
+    "oh maser": "Maser",
+    "water maser": "Maser",
+    "methanol maser": "Maser",
     "transient": "Transient",
     "transients": "Transient",
     "burst": "Transient",
@@ -686,10 +704,11 @@ def parse_summary(lines: Sequence[str]) -> tuple[List[str], List[str]]:
     return networks, wavebands
 
 
-def load_pc_members(path: Path) -> Tuple[List[str], Dict[str, Dict[str, List[str]]], Dict[str, str], Set[str], Dict[str, Set[str]]]:
-    """Read PC member entries and return names, fixed reviewer preferences, email mapping, chair markers, and science tags.
+def load_pc_members(path: Path) -> Tuple[List[str], Dict[str, Dict[str, List[str]]], Dict[str, str], Set[str], Dict[str, Set[str]], Dict[str, Dict[str, int]]]:
+    """Read PC member entries and return names, fixed reviewer preferences, email mapping, chair markers, science tags, and tag priority order.
 
     Appending `*` to any part of a member's name marks them as a chair who should receive leftover assignments.
+    Tags are listed left-to-right in priority order: the first tag listed has the highest priority (index 0).
     """
     try:
         content = path.read_text(encoding="utf-8")
@@ -701,6 +720,7 @@ def load_pc_members(path: Path) -> Tuple[List[str], Dict[str, Dict[str, List[str
     emails: Dict[str, str] = {}
     chairs: Set[str] = set()
     member_tags: Dict[str, Set[str]] = {}
+    member_tag_priority: Dict[str, Dict[str, int]] = {}  # member → {tag: priority_index}
     for raw_line in content.splitlines():
         line = raw_line.strip()
         if not line:
@@ -712,6 +732,7 @@ def load_pc_members(path: Path) -> Tuple[List[str], Dict[str, Dict[str, List[str
         email: Optional[str] = None
         is_chair = False
         tags: Set[str] = set()
+        tag_order: Dict[str, int] = {}
         for token in tokens:
             if "#" in token:
                 try:
@@ -735,7 +756,10 @@ def load_pc_members(path: Path) -> Tuple[List[str], Dict[str, Dict[str, List[str
                 normalized_for_alias = re.sub(r"[^\w\s-]", "", cleaned_token)
                 lower_cleaned = normalized_for_alias.lower()
                 if lower_cleaned in SCIENCE_CATEGORY_ALIAS_TERMS:
-                    tags.add(SCIENCE_CATEGORY_ALIAS_TERMS[lower_cleaned])
+                    tag = SCIENCE_CATEGORY_ALIAS_TERMS[lower_cleaned]
+                    if tag not in tags:
+                        tag_order[tag] = len(tag_order)
+                        tags.add(tag)
                     continue
                 if cleaned_token:
                     name_tokens.append(cleaned_token.strip(",;"))
@@ -749,6 +773,7 @@ def load_pc_members(path: Path) -> Tuple[List[str], Dict[str, Dict[str, List[str
             chairs.add(name)
         if tags:
             member_tags[name] = tags
+            member_tag_priority[name] = tag_order
         if first_fixed or second_fixed:
             fixed[name] = {
                 "first": first_fixed,
@@ -759,7 +784,7 @@ def load_pc_members(path: Path) -> Tuple[List[str], Dict[str, Dict[str, List[str
 
     if not members:
         raise ValueError(f"No PC members found in {path}")
-    return members, fixed, emails, chairs, member_tags
+    return members, fixed, emails, chairs, member_tags, member_tag_priority
 
 
 def load_conflicts_file(path: Path) -> Dict[str, Set[str]]:
@@ -800,6 +825,7 @@ def assign_reviewers(
     manual_conflicts: Optional[Dict[str, Set[str]]] = None,
     prefer_science_tags: bool = False,
     member_science_tags: Optional[Dict[str, Set[str]]] = None,
+    member_tag_priority: Optional[Dict[str, Dict[str, int]]] = None,
 ) -> Dict[str, List[Tuple[str, str]]]:
     """Assign reviewers while balancing load, respecting per-role limits, and prioritising chairs/preferred expertise."""
     if not members:
@@ -816,6 +842,7 @@ def assign_reviewers(
         raise ValueError("Not enough PC members to satisfy reviewers-per-proposal.")
     chair_members = chair_members or set()
     member_science_tags = member_science_tags or {}
+    member_tag_priority = member_tag_priority or {}
     member_infos = [
         {
             "name": name,
@@ -825,6 +852,7 @@ def assign_reviewers(
             "second_count": 0,
             "is_chair": name in chair_members,
             "science_tags": set(member_science_tags.get(name, set())),
+            "tag_priority": dict(member_tag_priority.get(name, {})),
             "order": idx,
         }
         for idx, name in enumerate(members)
@@ -863,6 +891,62 @@ def assign_reviewers(
 
     PRIMARY_ROLE = "Primary Reviewer"
     SECONDARY_ROLE = "Secondary Reviewer"
+
+    # Pre-assign primary reviewer for proposals where a member is the best expert based on
+    # unique tag ownership.  "Best" = most unique-tag matches for the proposal; ties broken by
+    # the expert's tag priority (first-listed tag wins).  This ensures that e.g. a member listed
+    # as "Maser SpectralLine" gets Maser proposals assigned before generic SpectralLine ones.
+    # reserved_primaries tracks how many primary slots to protect from load-balancing.
+    reserved_primaries: Dict[str, int] = {}
+    if prefer_science_tags and max_first_per_member is not None:
+        # Map each tag to the members who hold it.
+        _tag_holders: Dict[str, List[dict]] = {}
+        for _m in member_infos:
+            for _t in _m["science_tags"]:
+                _tag_holders.setdefault(_t, []).append(_m)
+
+        # For each proposal, determine the single best expert via unique-tag scoring.
+        # score = (neg_unique_count, best_tag_priority) — minimise to find winner.
+        expert_proposals: Dict[str, List[Tuple[int, int, str]]] = {}
+        for _p_idx, _p in enumerate(proposals):
+            _pcode = _p["exp"]
+            if _pcode in fixed_first_map:
+                continue
+            _ptags = set(_p.get("science_tags") or [])
+            _scores: Dict[str, Tuple[int, int]] = {}  # expert → (neg_count, best_prio)
+            for _tag in _ptags:
+                _holders = _tag_holders.get(_tag, [])
+                if len(_holders) == 1:
+                    _expert = _holders[0]
+                    _ename = _expert["name"]
+                    _prio = _expert.get("tag_priority", {}).get(_tag, 999)
+                    _neg, _best = _scores.get(_ename, (0, 999))
+                    _scores[_ename] = (_neg - 1, min(_best, _prio))
+            if not _scores:
+                continue
+            # Pick the expert with the best score (most unique matches, then lowest priority).
+            _winner = min(_scores, key=lambda e: _scores[e])
+            _best_prio = _scores[_winner][1]
+            expert_proposals.setdefault(_winner, []).append((_best_prio, _p_idx, _pcode))
+
+        # For each expert, sort slots by (tag_priority, proposal_index) and pre-assign up to limit.
+        for _ename, _slots in expert_proposals.items():
+            _seen: Dict[str, Tuple[int, int, str]] = {}
+            for _entry in _slots:
+                _pcode = _entry[2]
+                if _pcode not in _seen or _entry < _seen[_pcode]:
+                    _seen[_pcode] = _entry
+            _sorted_slots = sorted(_seen.values())
+
+            reserved_primaries[_ename] = min(len(_sorted_slots), max_first_per_member)
+
+            _pre_count = 0
+            for _, _, _pcode in _sorted_slots:
+                if _pre_count >= max_first_per_member:
+                    break
+                if _pcode not in fixed_first_map:
+                    fixed_first_map[_pcode] = _ename
+                    _pre_count += 1
 
     def has_capacity(member: dict, role: str) -> bool:
         if role == PRIMARY_ROLE and max_first_per_member is not None:
@@ -915,12 +999,23 @@ def assign_reviewers(
             ]
         if not eligible:
             raise ValueError("No available reviewers remaining for assignment within limits.")
-        if prefer_science_tags and role == PRIMARY_ROLE and proposal_tags:
-            preferred = [
-                member for member in eligible if member["science_tags"] and member["science_tags"].intersection(proposal_tags)
-            ]
-            if preferred:
-                eligible = preferred
+        if prefer_science_tags and role == PRIMARY_ROLE:
+            if proposal_tags:
+                preferred = [
+                    member for member in eligible if member["science_tags"] and member["science_tags"].intersection(proposal_tags)
+                ]
+                if preferred:
+                    eligible = preferred
+            if not (proposal_tags and any(m["science_tags"] & proposal_tags for m in eligible)):
+                # No tag match: protect reserved primary slots so sole-experts keep
+                # capacity for their pre-assigned proposals.
+                if reserved_primaries and max_first_per_member is not None:
+                    non_reserved = [
+                        m for m in eligible
+                        if (max_first_per_member - m["first_count"]) > reserved_primaries.get(m["name"], 0)
+                    ]
+                    if non_reserved:
+                        eligible = non_reserved
         chosen = min(eligible, key=lambda m: priority_key(m, role))
         return chosen
 
@@ -1063,6 +1158,14 @@ def assign_reviewers(
                         excluded_norms.add(norm)
                 if recipient_norm and recipient_norm in excluded_norms:
                     continue
+                # Don't rebalance a tag-matched assignment to a member with no matching expertise.
+                if prefer_science_tags:
+                    ptags = set(proposal.get("science_tags") or [])
+                    if ptags:
+                        donor_tags = donor_info.get("science_tags", set())
+                        recipient_tags = recipient_info.get("science_tags", set())
+                        if donor_tags & ptags and not (recipient_tags & ptags):
+                            continue
                 return proposal, idx
             return None
 
@@ -1863,6 +1966,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     role_labels: Optional[List[str]] = None
     manual_conflicts: Dict[str, Set[str]] = {}
     member_tags: Dict[str, Set[str]] = {}
+    member_tag_priority: Dict[str, Dict[str, int]] = {}
 
     if args.conflicts_file:
         try:
@@ -1873,7 +1977,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.pc_members:
         try:
-            members, fixed_preferences, _member_emails, chair_members, member_tags = load_pc_members(args.pc_members)
+            members, fixed_preferences, _member_emails, chair_members, member_tags, member_tag_priority = load_pc_members(args.pc_members)
         except (FileNotFoundError, ValueError) as exc:
             print(exc, file=sys.stderr)
             return 1
@@ -1937,6 +2041,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 manual_conflicts or None,
                 args.prefer_matching_tags,
                 member_tags,
+                member_tag_priority,
             )
         except ValueError as exc:
             print(exc, file=sys.stderr)
