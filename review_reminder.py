@@ -173,7 +173,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             "Dear {reviewer},\n\n"
             "This is a reminder that the following review(s) are still outstanding as of {today}:\n"
             "{details}\n\n"
-            "Please upload your review to the shared folder as soon as possible. If you have issues with the form upload, please email your assessments to this email.\n\n"
+            "Please upload your review to the shared folder as soon as possible. If you have any issues with the form upload, or if something has gone wrong with a submission, please just email your assessments directly to jack.radcliffe@manchester.ac.uk.\n\n"
             "Kind regards,\n"
             "EVN Programme Committee Chair"
         ),
@@ -655,7 +655,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
 
     try:
-        _member_names, _fixed, member_emails, _chairs, _tags = load_pc_members(args.pc_members)
+        _member_names, _fixed, member_emails, _chairs, _tags, _tag_priority = load_pc_members(args.pc_members)
     except (FileNotFoundError, ValueError) as exc:
         print(exc, file=sys.stderr)
         return 1

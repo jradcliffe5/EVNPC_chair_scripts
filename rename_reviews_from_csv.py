@@ -101,6 +101,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             "modified file."
         ),
     )
+    parser.add_argument(
+        "--include-unlisted",
+        action="store_true",
+        help=(
+            "After processing the CSV, also pick up any '... - First Last.ext' files "
+            "in the source directory that have no matching CSV row (e.g. reviews sent "
+            "by email and dropped into the folder manually)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -111,6 +120,18 @@ def sanitized_component(value: str) -> str:
         return "Unknown"
     filtered = "".join(ch for ch in stripped if ch.isalnum())
     return filtered or "Unknown"
+
+
+def first_field(row: dict, *keys: str) -> str:
+    """Return the first non-empty value among the given column names.
+
+    Tolerates Google Forms exports renaming columns (e.g. "Name" -> "First name").
+    """
+    for key in keys:
+        value = row.get(key)
+        if value and value.strip():
+            return value
+    return ""
 
 
 def normalize_name(value: str) -> str:
@@ -224,10 +245,17 @@ def build_new_name(prefix: str, name: str, surname: str, suffix: str) -> str:
 
 
 def build_base_name(prefix: str, name: str, surname: str) -> str:
-    """Construct the base filename without a file extension."""
+    """Construct the base filename without a file extension.
+
+    Multi-word names (e.g. "Sara Elisa") are kept as separate underscore-joined
+    tokens so downstream token matching (assignments, reminders) still works.
+    """
     components = [prefix]
     for value in (name, surname):
-        components.append(sanitized_component(value))
+        words = value.split()
+        if not words:
+            continue
+        components.extend(sanitized_component(word) for word in words)
     return "_".join(components)
 
 
@@ -264,6 +292,83 @@ def extract_docx_text(path: Path) -> str:
     return "\n".join(lines)
 
 
+def reviewer_from_filename(path: Path) -> Optional[Tuple[str, str]]:
+    """Parse ('First', 'Last') from a '... - First Last.ext' submission filename.
+
+    Returns ``None`` when the filename has no ' - ' separator (so it can't be
+    recognised as a Google-Forms-style review upload). When the name is a single
+    word it is treated as the surname.
+    """
+    stem, _version = split_version_suffix(path.stem)
+    if " - " not in stem:
+        return None
+    full = stem.rsplit(" - ", 1)[1].strip()
+    if not full:
+        return None
+    words = full.split()
+    if len(words) == 1:
+        return "", words[0]
+    return " ".join(words[:-1]), words[-1]
+
+
+def process_submission(
+    located: Path,
+    name: str,
+    surname: str,
+    args: argparse.Namespace,
+    dest_dir: Path,
+    dry_run: bool,
+    convert_docx: bool,
+    missing: list,
+) -> bool:
+    """Copy (or convert) a located submission into ``dest_dir``.
+
+    Returns ``True`` when the file was handled, ``False`` when it failed and was
+    recorded in ``missing``.
+    """
+    suffix = located.suffix or ".txt"
+    if suffix.lower() == ".docx" and convert_docx:
+        base = build_base_name(args.prefix, name, surname)
+        if args.prefer_newest:
+            txt_destination = dest_dir / f"{base}.txt"
+            docx_destination = dest_dir / f"{base}{suffix}"
+        else:
+            stem = unique_stem(dest_dir, base, [".txt", suffix])
+            txt_destination = dest_dir / f"{stem}.txt"
+            docx_destination = dest_dir / f"{stem}{suffix}"
+
+        if dry_run:
+            print(f"[DRY-RUN] {located} -> {txt_destination} (converted)")
+            print(f"[DRY-RUN] {located} -> {docx_destination}")
+        else:
+            try:
+                content = extract_docx_text(located)
+            except RuntimeError as exc:
+                if not args.skip_missing:
+                    missing.append((name, surname, str(exc)))
+                return False
+            txt_destination.parent.mkdir(parents=True, exist_ok=True)
+            txt_destination.write_text(content, encoding="utf-8")
+            shutil.copy2(located, docx_destination)
+            print(f"Converted: {located} -> {txt_destination}")
+            print(f"Copied: {located} -> {docx_destination}")
+    else:
+        new_name = build_new_name(args.prefix, name, surname, suffix)
+        destination = (
+            dest_dir / new_name
+            if args.prefer_newest
+            else unique_destination(dest_dir / new_name)
+        )
+
+        if dry_run:
+            print(f"[DRY-RUN] {located} -> {destination}")
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(located, destination)
+            print(f"Copied: {located} -> {destination}")
+    return True
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
 
@@ -290,8 +395,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
             reader = csv.DictReader(handle)
             for row in reader:
-                name = row.get("Name", "").strip()
-                surname = row.get("Surname", "").strip()
+                name = first_field(row, "First name", "First Name", "Name").strip()
+                surname = first_field(row, "Surname", "Last name", "Last Name").strip()
 
                 if not name and not surname:
                     if not args.skip_missing:
@@ -313,49 +418,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         missing.append((name, surname, "Matching file not found."))
                     continue
 
-                suffix = located.suffix or ".txt"
-                if suffix.lower() == ".docx" and convert_docx:
-                    base = build_base_name(args.prefix, name, surname)
-                    if args.prefer_newest:
-                        txt_destination = dest_dir / f"{base}.txt"
-                        docx_destination = dest_dir / f"{base}{suffix}"
-                    else:
-                        stem = unique_stem(dest_dir, base, [".txt", suffix])
-                        txt_destination = dest_dir / f"{stem}.txt"
-                        docx_destination = dest_dir / f"{stem}{suffix}"
-
-                    if dry_run:
-                        print(f"[DRY-RUN] {located} -> {txt_destination} (converted)")
-                        print(f"[DRY-RUN] {located} -> {docx_destination}")
-                    else:
-                        try:
-                            content = extract_docx_text(located)
-                        except RuntimeError as exc:
-                            if not args.skip_missing:
-                                missing.append((name, surname, str(exc)))
-                            continue
-                        txt_destination.parent.mkdir(parents=True, exist_ok=True)
-                        txt_destination.write_text(content, encoding="utf-8")
-                        shutil.copy2(located, docx_destination)
-                        print(f"Converted: {located} -> {txt_destination}")
-                        print(f"Copied: {located} -> {docx_destination}")
-                else:
-                    new_name = build_new_name(args.prefix, name, surname, suffix)
-                    destination = (
-                        dest_dir / new_name
-                        if args.prefer_newest
-                        else unique_destination(dest_dir / new_name)
-                    )
-
-                    if dry_run:
-                        print(f"[DRY-RUN] {located} -> {destination}")
-                    else:
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(located, destination)
-                        print(f"Copied: {located} -> {destination}")
-                processed += 1
-                if args.prefer_newest:
+                if process_submission(
+                    located, name, surname, args, dest_dir, dry_run, convert_docx, missing
+                ):
+                    processed += 1
                     processed_reviewers.add(reviewer_key)
+
+            if args.include_unlisted:
+                # Sweep the source directory for review uploads with no CSV row.
+                seen_unlisted: set[str] = set()
+                for candidate in sorted(source_dir.rglob("*")):
+                    if not candidate.is_file():
+                        continue
+                    parsed = reviewer_from_filename(candidate)
+                    if parsed is None:
+                        continue
+                    name, surname = parsed
+                    reviewer_key = normalize_name(f"{name} {surname}")
+                    if reviewer_key in processed_reviewers or reviewer_key in seen_unlisted:
+                        continue
+                    located = find_submission_file(
+                        name, surname, source_dir, prefer_newest=args.prefer_newest
+                    )
+                    if located is None:
+                        continue
+                    if process_submission(
+                        located, name, surname, args, dest_dir, dry_run, convert_docx, missing
+                    ):
+                        processed += 1
+                        processed_reviewers.add(reviewer_key)
+                        seen_unlisted.add(reviewer_key)
     except FileNotFoundError:
         print(f"CSV not found: {args.csv_path}", file=sys.stderr)
         return 1

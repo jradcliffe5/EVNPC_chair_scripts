@@ -67,13 +67,13 @@ case "$SECTION" in
           "$SHEETS_URL" \
           --prefix primary \
           --source-dir "$REVIEWS_SOURCE_DIR" \
-          --dest-dir primary_pc_reviews --prefer-newest
+          --dest-dir primary_pc_reviews --prefer-newest --include-unlisted
         ;;
       reminder)
         $PY_EXEC ${SCRIPTS_DIR}/review_reminder.py \
           --assignments reviewer_assignments.txt --reviews-dir primary_pc_reviews \
           --pc-members EVN_pc_members.txt --due-dates due_dates.txt \
-          --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APPPWD $DRY_RUN
+          --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APP_PWD $DRY_RUN
         ;;
       latex)
         $PY_EXEC ${SCRIPTS_DIR}/reviews_to_latex.py \
@@ -93,13 +93,13 @@ case "$SECTION" in
           "$SHEETS_URL" \
           --prefix secondary \
           --source-dir "$REVIEWS_SOURCE_DIR" \
-          --dest-dir secondary_pc_reviews --prefer-newest
+          --dest-dir secondary_pc_reviews --prefer-newest --include-unlisted
         ;;
       reminder)
         $PY_EXEC ${SCRIPTS_DIR}/review_reminder.py \
           --assignments reviewer_assignments.txt --reviews-dir secondary_pc_reviews \
           --pc-members EVN_pc_members.txt --due-dates due_dates.txt \
-          --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APPPWD $DRY_RUN
+          --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APP_PWD $DRY_RUN
         ;;
       latex)
         $PY_EXEC ${SCRIPTS_DIR}/reviews_to_latex.py \
@@ -119,13 +119,13 @@ case "$SECTION" in
           "$SHEETS_URL" \
           --prefix all \
           --source-dir "$REVIEWS_SOURCE_DIR" \
-          --dest-dir all_pc_reviews --prefer-newest
+          --dest-dir all_pc_reviews --prefer-newest --include-unlisted
         ;;
       reminder)
         $PY_EXEC ${SCRIPTS_DIR}/review_reminder.py \
           --assignments reviewer_assignments.txt --reviews-dir all_pc_reviews \
           --pc-members EVN_pc_members.txt --due-dates due_dates.txt \
-          --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APPPWD $DRY_RUN
+          --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APP_PWD $DRY_RUN
         ;;
       latex)
         $PY_EXEC ${SCRIPTS_DIR}/reviews_to_latex.py \
@@ -149,14 +149,14 @@ case "$SECTION" in
           --pi-emails-file "EVNPC_${SESSION}_pi_emails.txt" \
           --pdf-dir feedback_tex/ \
           --code-mapping evn_code_mapping.txt \
-          --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APPPWD $FEEDBACK_SEND_MODE
+          --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APP_PWD $FEEDBACK_SEND_MODE
         ;;
       reminder)
         $PY_EXEC ${SCRIPTS_DIR}/review_reminder.py \
           --feedback-docx "EVNPC_${SESSION}_feedback.docx" \
           --assignments reviewer_assignments.txt \
           --pc-members EVN_pc_members.txt \
-          --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APPPWD $DRY_RUN
+          --smtp-username $GMAIL_ADDRESS --smtp-password $GMAIL_APP_PWD $DRY_RUN
         ;;
       --tex-only)
         $PY_EXEC ${SCRIPTS_DIR}/generate_feedback_emails.py \
