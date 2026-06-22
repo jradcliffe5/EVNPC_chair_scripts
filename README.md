@@ -6,7 +6,7 @@ Utility scripts to help the EVN Programme Committee chair prepare reviewer templ
 - Python 3.9 or newer.
 - Poppler's `pdftotext` binary available on `PATH` (used by `proposal_to_review_template.py`).
 - Proposal PDFs exported from the EVN submission system.
-- Optional: a current list of PC members in `EVN_pc_members.txt` (`Name Email` per line, plus optional `E25A001#1` fixed preferences).
+- Optional: a current list of PC members in `EVN_pc_members.txt` — see [PC members file format](#pc-members-file-format) below.
 
 ### Additional packages for `supplement_meeting_notes.py`
 ```
@@ -22,10 +22,10 @@ The shell script `run-PC-scripts.sh` is the primary interface for the full PC-ch
 | Variable | Purpose |
 |---|---|
 | `EVNPC_SHEETS` | Google Sheets CSV export URL (or local CSV path) for the review submission form |
-| `GMAIL_ADDRESS` | Gmail address used as the SMTP sender for review reminders |
-| `GMAIL_APPPWD` | Gmail App Password for SMTP authentication |
+| `GMAIL_ADDRESS` | Gmail address used as the SMTP sender for review reminders and feedback emails |
+| `GMAIL_APP_PWD` | Gmail App Password for SMTP/IMAP authentication |
 
-Edit the `SESSION` variable at the top of the script to match the current observing period (e.g. `2026A`).
+Edit the `SESSION` variable at the top of the script to match the current observing period (e.g. `2026A`). The script also assumes the scripts live in `SCRIPTS_DIR` and reviewer file uploads land in `REVIEWS_SOURCE_DIR` (both set near the top of `run-PC-scripts.sh`) and runs everything through the pinned `PY_EXEC` interpreter — adjust these paths for your machine.
 
 ### Commands
 
@@ -84,8 +84,27 @@ Key options:
 - `--reviewers-per-proposal N` — number of reviewers per proposal (default: 2)
 - `--max-per-member N`, `--max-first-per-member N`, `--max-second-per-member N` — load-balancing caps
 - `--conflicts-file extra_conflicts.txt` — preload manual conflict exclusions (`E26A004: Alice Smith, Bob Jones`)
-- `--prefer-matching-tags` — prefer reviewers whose declared expertise matches the proposal science tags
-- Add `*` to a PC member's surname in `EVN_pc_members.txt` to mark them as a fallback chair (e.g. `Jack Radcliffe*`)
+- `--prefer-matching-tags` — prefer reviewers whose declared expertise matches the proposal science tags (see [PC members file format](#pc-members-file-format))
+- Add `*` to any part of a PC member's name in `EVN_pc_members.txt` to mark them as a fallback chair who receives leftover assignments (e.g. `Jack Radcliffe*`)
+
+#### PC members file format
+
+`EVN_pc_members.txt` has one member per line. Each line is whitespace-separated and may combine any of the following tokens in any order:
+
+```
+Jack Radcliffe* jack.f.radcliffe@gmail.com E25A001#1 E25A016#2 AGN astrometry
+John Smith john.smith@example.org galactic maser
+Sarah Marais
+```
+
+| Token | Meaning |
+|---|---|
+| Name words | The member's display name. Append `*` to any word to mark a fallback chair. |
+| A token containing `@` | The member's email address (used for reminders). Optional. |
+| `CODE#1` / `CODE#2` | Fixed assignment: force this member to be the primary (`#1`) or secondary (`#2`) reviewer of proposal `CODE`. May be repeated. |
+| Science keywords | Declared expertise tags, used by `--prefer-matching-tags`. Listed left-to-right in priority order (first = highest priority). |
+
+Recognised science keywords map to these categories: **Galactic** (`galactic`, `milky way`, `stellar`, `star formation`, `pulsar`), **Extragalactic** (`extragalactic`, `galaxy`, `galaxies`, `cluster`), **Spectral Line** (`spectral line`, `molecular line`, `hi`), **Maser** (`maser`, `megamaser`, `ohm`, `water maser`, `methanol maser`), **Transient** (`transient`, `burst`, `frb`, `grb`), **AGN** (`agn`, `blazar`, `seyfert`, `quasar`), **Supernovae** (`supernova`, `snr`, `remnant`), **Pulsar** (`pulsar`, `psr`, `scintillation`, `magnetar`, `neutron star`, `msp`), **Astrometry** (`astrometry`, `proper motion`, `parallax`, `reference frame`, `icrf`, `geodesy`), and **Other**. Proposal science tags are inferred automatically from each PDF (written to `--science-tags-file`); with `--prefer-matching-tags` the allocator preferentially matches proposals to members whose declared tags overlap.
 
 ### 2. Distribute and collect reviews
 
@@ -106,7 +125,12 @@ python rename_reviews_from_csv.py "$EVNPC_SHEETS" \
   --dest-dir primary_pc_reviews --prefer-newest
 ```
 
-Use `--dry-run` to preview changes and `--skip-missing` to ignore missing files.
+Key options:
+- `--dry-run` — preview renames without touching files
+- `--skip-missing` — ignore CSV rows whose uploaded file is missing
+- `--prefer-newest` — when a reviewer submits more than once, keep the most recent file
+- `--include-unlisted` — also pick up `... - First Last.ext` files in the source directory that have no matching CSV row (e.g. reviews emailed in and dropped into the folder manually). Used by `run-PC-scripts.sh`.
+- `--no-docx-conversion` — disable the automatic conversion of `.docx` submissions to `.txt`
 
 ### 3. Send review reminders
 
@@ -143,6 +167,12 @@ Save reminder drafts to files instead of sending:
 ```bash
 python review_reminder.py ... --export-emails drafts_dir/
 ```
+
+Other useful options:
+- `--summary-only` — print only the outstanding-reviews summary report, with no per-reviewer reminder content
+- `--current-date 2026-02-20` — override "now" (ISO format) when computing overdue status, for testing or backfilling
+- `--message-template` / `--subject-template` — customise the reminder body and subject
+- `--smtp-server`, `--smtp-port`, `--smtp-use-ssl`, `--from-address`, `--cc`, `--reply-to` — SMTP and header overrides
 
 ### 4. Build the LaTeX review summary
 
