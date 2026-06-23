@@ -381,7 +381,10 @@ def collect_review_files(reviews_dir: Path) -> List[ReviewFile]:
         proposals: Dict[str, bool] = {}
         if path.suffix.lower() == ".txt":
             try:
-                content = path.read_text(encoding="utf-8", errors="replace")
+                # utf-8-sig strips a leading BOM, which str.strip() does not treat
+                # as whitespace and would otherwise break separator/proposal parsing
+                # for the first proposal in a file.
+                content = path.read_text(encoding="utf-8-sig", errors="replace")
             except OSError:
                 content = ""
             proposals = parse_review_text(content)

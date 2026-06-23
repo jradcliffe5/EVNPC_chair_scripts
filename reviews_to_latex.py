@@ -278,7 +278,9 @@ def role_sort_key(role: Optional[int]) -> int:
 def read_text_with_fallback(path: Path) -> str:
     """Read text as UTF-8, falling back to cp1252 for legacy files."""
     try:
-        return path.read_text(encoding="utf-8")
+        # utf-8-sig strips a leading BOM (which str.strip() leaves in place and
+        # would otherwise drop the first proposal during parsing).
+        return path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as utf8_error:
         try:
             text = path.read_text(encoding="cp1252")

@@ -199,7 +199,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def read_text(path: Path) -> str:
     try:
-        return path.read_text(encoding="utf-8")
+        # utf-8-sig strips a leading BOM (which str.strip() leaves in place and
+        # would otherwise drop the first proposal during parsing).
+        return path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError:
         return path.read_text(encoding="cp1252")
 
