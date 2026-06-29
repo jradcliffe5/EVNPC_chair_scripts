@@ -32,7 +32,21 @@ PROPOSAL_HEADER_RE = re.compile(
     r"^(?P<code>[A-Z]\d{2}[A-Z]\d{3})(?:\s{2,}|\s*$)",
     re.IGNORECASE,
 )
-SECTION_LABELS = ("Grade:", "Referee comments:", "Technical review:", "Time recommended:")
+# All section headings emitted by the review template.  These must all be
+# recognised so that an *empty* template (which still contains the heading
+# lines, e.g. "Strengths:"/"Weaknesses:") is not mistaken for a submitted
+# review: unrecognised headings would otherwise be folded into the preceding
+# section's content and counted as if the reviewer had written something.
+SECTION_LABELS = (
+    "Grade:",
+    "Referee comments:",
+    "General remark:",
+    "General remarks:",
+    "Strengths:",
+    "Weaknesses:",
+    "Technical review:",
+    "Time recommended:",
+)
 
 
 @dataclass

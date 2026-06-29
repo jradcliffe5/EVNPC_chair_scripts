@@ -226,18 +226,27 @@ def normalise_paragraphs(text: str) -> str:
     return "\n\n".join(cleaned)
 
 
+def _base_proposal_code(token: str) -> str:
+    """Strip a trailing '/LEGACY' suffix from a proposal-code column token.
+
+    Headers may carry the legacy code alongside the EVN code, e.g.
+    'E26B001/EB120'; only the EVN session code is used for matching.
+    """
+    return token.strip().split("/", 1)[0].strip()
+
+
 def parse_header_columns(header: str) -> Tuple[str, str, str, str]:
     """Return (code, pi, networks, wavelengths) from the header line."""
     stripped = header.strip()
     columns = re.split(r"\s{2,}", stripped)
-    if len(columns) >= 4 and PROPOSAL_CODE_RE.match(columns[0].strip()):
-        code = columns[0].strip()
+    if len(columns) >= 4 and PROPOSAL_CODE_RE.match(_base_proposal_code(columns[0])):
+        code = _base_proposal_code(columns[0])
         pi = columns[1].strip()
         networks = " ".join(c.strip() for c in columns[2:-1] if c.strip())
         wavelengths = columns[-1].strip()
         return code, pi, networks, wavelengths
     # Fixed-width fallback
-    return header[0:22].strip(), header[22:45].strip(), header[45:72].strip(), header[72:].strip()
+    return _base_proposal_code(header[0:22]), header[22:45].strip(), header[45:72].strip(), header[72:].strip()
 
 
 def parse_value_block(

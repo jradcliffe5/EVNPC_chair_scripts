@@ -23,6 +23,10 @@ from textwrap import dedent
 from typing import Dict, Iterable, List, Optional, Sequence
 
 SEPARATOR = "=" * 100
+# Different generators emit separators of differing widths (e.g. 80 vs 100 '='),
+# so detect/split on any line consisting solely of a run of '=' characters
+# rather than relying on an exact width.
+SEPARATOR_RE = re.compile(r"^[ \t]*={20,}[ \t]*$", re.MULTILINE)
 FIELD_NAMES = [
     "Grade",
     "Referee comments",
@@ -221,6 +225,16 @@ def latex_escape(text: str) -> str:
     pattern = re.compile("|".join(re.escape(key) for key in replacements))
     escaped = pattern.sub(lambda match: replacements[match.group()], text)
     return normalize_unicode(escaped)
+
+def bare_proposal_code(code: str) -> str:
+    """Return the proposal code without any '/<alt-code>' suffix.
+
+    Review headers combine the proposal code with the EVN code (e.g.
+    ``E26B003/EE011``), but assignment/conflict maps are keyed on the bare
+    proposal code (``E26B003``).  Strip the suffix so lookups line up.
+    """
+    return code.split("/", 1)[0].strip()
+
 
 def reviewer_initials(name: str) -> str:
     """Return uppercase initials derived from the reviewer name."""
@@ -492,7 +506,9 @@ def parse_header_columns(header: str) -> tuple[str, str, str, str]:
     stripped = header.strip()
     if stripped:
         columns = re.split(r"\s{2,}", stripped)
-        if len(columns) >= 4 and PROPOSAL_CODE_RE.match(columns[0].strip()):
+        # The code column may carry a '/'-suffixed alternate code (e.g.
+        # "E26B001/EB120"), so match against the leading EVN code only.
+        if len(columns) >= 4 and PROPOSAL_CODE_RE.match(columns[0].strip().split("/")[0]):
             code = columns[0].strip()
             pi = columns[1].strip()
             networks = " ".join(part.strip() for part in columns[2:-1] if part.strip())
@@ -510,12 +526,12 @@ def parse_header_columns(header: str) -> tuple[str, str, str, str]:
 def parse_review_file(path: Path) -> Dict[str, ProposalSummary]:
     """Parse a single review file into proposal summaries keyed by proposal code."""
     content = read_text_with_fallback(path)
-    if SEPARATOR not in content:
+    if not SEPARATOR_RE.search(content):
         simple_summaries = parse_simple_review_content(content, path)
         if simple_summaries:
             return simple_summaries
 
-    blocks = [block.strip("\n") for block in content.split(SEPARATOR) if block.strip()]
+    blocks = [block.strip("\n") for block in SEPARATOR_RE.split(content) if block.strip()]
     summaries: Dict[str, ProposalSummary] = {}
 
     for block in blocks:
@@ -530,7 +546,11 @@ def parse_review_file(path: Path) -> Dict[str, ProposalSummary]:
         exp, pi, networks, wavelengths = parse_header_columns(header)
         title = lines[1].strip() if len(lines) > 1 else ""
 
-        field_values = {name: "" for name in FIELD_NAMES}
+        # Use the extended field set (which also recognises General remark /
+        # Strengths / Weaknesses) so that a Grade block is not contaminated by a
+        # following Strengths:/Weaknesses: section.  Those sections are folded
+        # into the referee comments below, mirroring the simple-format parser.
+        field_values = {name: "" for name in SIMPLE_FIELD_NAMES}
         index = 2
         while index < len(lines):
             current = lines[index]
@@ -543,15 +563,33 @@ def parse_review_file(path: Path) -> Dict[str, ProposalSummary]:
                 continue
 
             label = stripped.split(":", 1)[0].strip()
-            if label not in FIELD_NAMES:
+            canonical = SIMPLE_FIELD_ALIASES.get(label.lower())
+            if not canonical:
                 index += 1
                 continue
 
-            label, value, index = parse_value_block(lines, index)
-            field_values[label] = value
+            label, value, index = parse_value_block(
+                lines,
+                index,
+                field_names=SIMPLE_FIELD_NAMES,
+                field_aliases=SIMPLE_FIELD_ALIASES,
+            )
+            field_values[canonical] = value
 
-        if not any(field_values[name] for name in FIELD_NAMES):
+        if not any(field_values[name] for name in SIMPLE_FIELD_NAMES):
             continue  # Skip blocks without substantive content.
+
+        referee_comments = field_values["Referee comments"].strip()
+        extra_sections: List[str] = []
+        for label in ("General remark", "Strengths", "Weaknesses"):
+            value = field_values.get(label, "").strip()
+            if value:
+                extra_sections.append(f"{label}: {value}")
+        if extra_sections:
+            if referee_comments:
+                referee_comments = "\n\n".join([referee_comments] + extra_sections)
+            else:
+                referee_comments = "\n\n".join(extra_sections)
 
         if exp not in summaries:
             summaries[exp] = ProposalSummary(
@@ -568,7 +606,7 @@ def parse_review_file(path: Path) -> Dict[str, ProposalSummary]:
             reviewer=reviewer_name,
             source_file=path,
             grade=field_values["Grade"],
-            referee_comments=field_values["Referee comments"],
+            referee_comments=referee_comments,
             technical_review=field_values["Technical review"],
             time_recommended=field_values["Time recommended"],
         )
@@ -604,7 +642,13 @@ def apply_assignments(
 ) -> None:
     """Annotate review entries with assignment roles where available."""
     for code, summary in summaries.items():
-        reviewers_map = assignments.get(code)
+        bare = bare_proposal_code(code)
+        reviewers_map = (
+            assignments.get(code)
+            or assignments.get(code.upper())
+            or assignments.get(bare)
+            or assignments.get(bare.upper())
+        )
         if not reviewers_map:
             continue
         for review in summary.reviews:
@@ -735,7 +779,14 @@ def proposal_role_initials(
         elif review.role == 2 and secondary is None:
             secondary = reviewer_initials(review.reviewer)
 
-    code_map = assignments.get(summary.code) or assignments.get(summary.code.upper()) or {}
+    bare = bare_proposal_code(summary.code)
+    code_map = (
+        assignments.get(summary.code)
+        or assignments.get(summary.code.upper())
+        or assignments.get(bare)
+        or assignments.get(bare.upper())
+        or {}
+    )
     if primary is None or secondary is None:
         for reviewer_name, role in code_map.items():
             if role == 1 and primary is None:
@@ -778,11 +829,14 @@ def build_agenda_text(
         pre_grade = proposal_pre_grade(summary)
         std_grade = proposal_grade_std(summary)
         low_grade_count = proposal_low_grade_count(summary, threshold=2.0)
+        bare_code = bare_proposal_code(summary.code)
         conflict_value = (
             conflicts.get(summary.code)
             or conflicts.get(summary.code.upper())
             or conflicts.get(code)
             or conflicts.get(code.upper())
+            or conflicts.get(bare_code)
+            or conflicts.get(bare_code.upper())
             or "NONE"
         )
 
